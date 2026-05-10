@@ -1,5 +1,5 @@
 # Dependencies
-node_modules/
+node_modules
 
 # Debug logs
 *.log
@@ -10,7 +10,7 @@ yarn-debug.log*
 .DS_Store
 Thumbs.db
 
-# Environment variables (SECURITY!)
+# Environment variables
 .env
 .env.local
 
