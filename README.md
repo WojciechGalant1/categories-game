@@ -1,6 +1,4 @@
-# Państwa Miasta - K8S Project
-
-Prosty projekt gry wieloosobowej w "Państwa-Miasta".
+# Państwa Miasta
 
 ## Wymagania
 - Node.js (wersja 18 lub nowsza)
