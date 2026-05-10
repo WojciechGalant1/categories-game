@@ -1,0 +1,82 @@
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Outfit:wght@300;400;600;800&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Outfit", sans-serif;
+  --font-display: "Bricolage Grotesque", sans-serif;
+
+  --color-brand-primary: #7c3aed;
+  --color-brand-primary-hover: #6d28d9;
+  --color-brand-secondary: #ec4899;
+  --color-brand-accent: #10b981;
+  --color-brand-accent-hover: #059669;
+  --color-brand-bg: #0b0518;
+  --color-brand-surface: rgba(255, 255, 255, 0.03);
+  --color-brand-surface-hover: rgba(255, 255, 255, 0.08);
+  --color-brand-border: rgba(255, 255, 255, 0.08);
+}
+
+@layer base {
+  body {
+    @apply bg-brand-bg text-white font-sans min-h-screen overflow-x-hidden;
+    /* Animated background gradient to give atmosphere and depth */
+    background: radial-gradient(circle at 15% 50%, rgba(124, 58, 237, 0.12), transparent 40%),
+                radial-gradient(circle at 85% 30%, rgba(236, 72, 153, 0.12), transparent 40%),
+                #0b0518;
+    background-attachment: fixed;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display tracking-tight;
+  }
+}
+
+@layer utilities {
+  .glass-panel {
+    @apply bg-brand-surface backdrop-blur-xl border border-brand-border shadow-[0_8px_32px_rgba(0,0,0,0.2)] rounded-2xl;
+  }
+
+  /* Entrance animations */
+  .animate-fade-in-up {
+    animation: fadeInUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    opacity: 0;
+    transform: translateY(20px) scale(0.98);
+  }
+
+  .animate-float {
+    animation: float 6s ease-in-out infinite;
+  }
+  
+  .delay-100 { animation-delay: 100ms; }
+  .delay-200 { animation-delay: 200ms; }
+  .delay-300 { animation-delay: 300ms; }
+  .delay-400 { animation-delay: 400ms; }
+  .delay-500 { animation-delay: 500ms; }
+  .delay-600 { animation-delay: 600ms; }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%) skewX(-12deg);
+  }
+}
