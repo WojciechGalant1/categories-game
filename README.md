@@ -1,14 +1,10 @@
-# Państwa Miasta - K8S Project
-
-Prosty projekt gry wieloosobowej w "Państwa-Miasta".
+# Państwa Miasta
 
 ## Wymagania
 - Node.js (wersja 18 lub nowsza)
 - npm
 
 ## Uruchamianie lokalne
-
-Aby uruchomić projekt lokalnie, musisz uruchomić osobno serwer (backend) oraz aplikację kliencką (frontend).
 
 ### 1. Serwer (Backend)
 
@@ -17,7 +13,6 @@ cd backendTest
 npm install
 node index.js
 ```
-Serwer domyślnie nasłuchuje na porcie `3000`.
 
 ### 2. Aplikacja (Frontend)
 
