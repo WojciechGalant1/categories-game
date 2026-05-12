@@ -9,7 +9,7 @@ info:
     2. Host configures settings (categories, time, rounds)
     3. Host starts the game → a random letter is drawn
     4. Players fill in answers for each category
-    5. Any player can trigger STOP (or time runs out)
+    5. Players click "Send answers" (or time runs out) → transition to reviewing
     6. Players review and vote on each other's answers
     7. Host ends the round → scores are calculated → next round or finish
     
@@ -286,9 +286,6 @@ paths:
       description: |
         Submit the player's answers for the current round. 
         Answers are a map of category name → answer string.
-        
-        If the room is in `stopping` status and all players have submitted answers, 
-        the status transitions to `reviewing`.
       parameters:
         - $ref: '#/components/parameters/RoomCode'
       requestBody:
@@ -660,10 +657,7 @@ components:
           nullable: true
           description: Unix timestamp (ms) when the round started
           example: 1715450000000
-        stopTriggeredAt:
-          type: integer
-          nullable: true
-          description: Unix timestamp (ms) when stop was triggered (deprecated, see stoppedPlayers)
+
         answers:
           type: object
           additionalProperties:
@@ -708,12 +702,11 @@ components:
           description: Whether the room is publicly listed
         status:
           type: string
-          enum: [lobby, playing, stopping, reviewing, finished]
+          enum: [lobby, playing, reviewing, finished]
           description: |
             Current phase of the room:
             - `lobby` — waiting for players, settings can be changed
             - `playing` — round in progress, players fill in answers
-            - `stopping` — stop triggered, waiting for remaining answers
             - `reviewing` — players vote on answers
             - `finished` — all rounds completed, final scores shown
           example: "playing"
