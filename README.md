@@ -40,14 +40,3 @@ Aplikacja domyślnie będzie dostępna pod adresem: [http://localhost:5173](http
 | 10 | `POST` | `/rooms/{code}/next-round` | `{ playerId }` | Przejście do następnej rundy (lub zakończenie gry). Tylko host. Liczy punkty za bieżącą rundę |
 | 11 | `POST` | `/rooms/{code}/reset` | `{ playerId }` | Powrót do lobby. Tylko host |
 
----
-## Przykładowe odpowiedzi API
-
-### Tworzenie pokoju
-
-### Request
-```json
-{
-  "nick": "Kacper",
-  "isPublic": true
-}
