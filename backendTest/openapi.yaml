@@ -1,0 +1,735 @@
+openapi: 3.0.3
+info:
+  title: Państwa Miasta - Game API
+  description: |
+    REST API for the "Państwa Miasta" (Countries & Cities) multiplayer word game.
+    
+    ## Game Flow
+    1. Host creates a room → players join via room code
+    2. Host configures settings (categories, time, rounds)
+    3. Host starts the game → a random letter is drawn
+    4. Players fill in answers for each category
+    5. Any player can trigger STOP (or time runs out)
+    6. Players review and vote on each other's answers
+    7. Host ends the round → scores are calculated → next round or finish
+    
+    ## Scoring
+    - **15 pts** — only player with a valid answer in that category
+    - **10 pts** — unique valid answer (different from others)
+    - **5 pts** — duplicate valid answer (same as another player)
+    - **0 pts** — empty or rejected by votes
+  version: 1.0.0
+  contact:
+    name: Państwa Miasta Dev Team
+
+servers:
+  - url: http://localhost:3000/api
+    description: Local development server
+
+tags:
+  - name: Rooms
+    description: Room management (create, list, join)
+  - name: Settings
+    description: Room configuration
+  - name: Gameplay
+    description: Game actions (start, stop, answers, voting)
+
+paths:
+  /rooms:
+    get:
+      tags: [Rooms]
+      operationId: listPublicRooms
+      summary: List public rooms
+      description: Returns all public rooms that are currently in the lobby phase (waiting for players).
+      responses:
+        '200':
+          description: List of public rooms
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PublicRoom'
+              example:
+                - code: "A1B2C3"
+                  hostNick: "Wojtek"
+                  playersCount: 3
+                  maxPlayers: 8
+
+    post:
+      tags: [Rooms]
+      operationId: createRoom
+      summary: Create a new room
+      description: Creates a new game room. The creator becomes the host.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRoomRequest'
+      responses:
+        '200':
+          description: Room created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JoinResponse'
+        '400':
+          description: Validation error (e.g. missing nick)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "Nick is required"
+
+  /rooms/{code}:
+    get:
+      tags: [Rooms]
+      operationId: getRoomState
+      summary: Get room state (polling)
+      description: |
+        Returns the full state of the room including players, settings, game state, and scores.
+        Used by the frontend for polling to keep the UI in sync.
+        
+        When the room is in `playing` status, the response includes `mainTimeLeft` 
+        (seconds remaining in the round).
+      parameters:
+        - $ref: '#/components/parameters/RoomCode'
+      responses:
+        '200':
+          description: Full room state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomState'
+        '404':
+          description: Room not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: "Room not found"
+
+  /rooms/{code}/join:
+    post:
+      tags: [Rooms]
+      operationId: joinRoom
+      summary: Join a room
+      description: |
+        Join an existing room by its code. If a player with the same nick already exists 
+        in the room, the existing player ID is returned (reconnect behavior).
+      parameters:
+        - $ref: '#/components/parameters/RoomCode'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JoinRoomRequest'
+      responses:
+        '200':
+          description: Successfully joined (or reconnected)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JoinResponse'
+        '400':
+          description: Game already started, room is full, or nick missing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Room not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /rooms/{code}/settings:
+    post:
+      tags: [Settings]
+      operationId: updateSettings
+      summary: Update room settings (host only)
+      description: |
+        Updates the room settings. Only the host can perform this action. 
+        Settings can only be changed while the room is in `lobby` status.
+        Supports partial updates — only provided fields are overwritten.
+      parameters:
+        - $ref: '#/components/parameters/RoomCode'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSettingsRequest'
+      responses:
+        '200':
+          description: Settings updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Cannot change settings (game not in lobby)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Only host can change settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Room not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /rooms/{code}/start:
+    post:
+      tags: [Gameplay]
+      operationId: startGame
+      summary: Start the game / next round
+      description: |
+        Starts the game (or next round after reviewing). Only the host can start the game.
+        A random letter is drawn, the round timer begins, and when time expires 
+        the status automatically transitions to `reviewing`.
+        
+        On the first round, all player scores are reset to 0.
+      parameters:
+        - $ref: '#/components/parameters/RoomCode'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlayerIdRequest'
+      responses:
+        '200':
+          description: Game started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Cannot start game (wrong status)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Only host can start game
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Room not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /rooms/{code}/stop:
+    post:
+      tags: [Gameplay]
+      operationId: triggerStop
+      summary: Trigger STOP
+      description: |
+        A player signals that they want to stop the round. Each player can trigger stop once.
+        When **all** players have triggered stop, the status automatically transitions to `reviewing`.
+      parameters:
+        - $ref: '#/components/parameters/RoomCode'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlayerIdRequest'
+      responses:
+        '200':
+          description: Stop registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Not in playing phase
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Player not in room
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Room not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /rooms/{code}/answers:
+    post:
+      tags: [Gameplay]
+      operationId: submitAnswers
+      summary: Submit answers
+      description: |
+        Submit the player's answers for the current round. 
+        Answers are a map of category name → answer string.
+        
+        If the room is in `stopping` status and all players have submitted answers, 
+        the status transitions to `reviewing`.
+      parameters:
+        - $ref: '#/components/parameters/RoomCode'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitAnswersRequest'
+            example:
+              playerId: "550e8400-e29b-41d4-a716-446655440000"
+              answers:
+                Państwa: "Polska"
+                Miasta: "Poznań"
+                Zwierzęta: "Panda"
+                Rośliny: "Paproć"
+                Imiona: "Patrycja"
+      responses:
+        '200':
+          description: Answers submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          description: Room not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /rooms/{code}/vote:
+    post:
+      tags: [Gameplay]
+      operationId: submitVote
+      summary: Submit a vote
+      description: |
+        Submit a vote on another player's answer for a specific category.
+        Voting is only possible during the `reviewing` phase.
+        
+        Each voter can cast one vote per (target player, category) pair.
+        A vote of `isValid: true` means the answer is accepted; `false` means rejected.
+      parameters:
+        - $ref: '#/components/parameters/RoomCode'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitVoteRequest'
+      responses:
+        '200':
+          description: Vote recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Not in reviewing phase
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Voter not in room
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Room not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /rooms/{code}/next-round:
+    post:
+      tags: [Gameplay]
+      operationId: nextRound
+      summary: End round / go to next round (host only)
+      description: |
+        Ends the current reviewing phase and either starts the next round 
+        or finishes the game if all rounds have been played.
+        
+        **Scoring is calculated** during this transition:
+        - 15 pts if the player is the only one with a valid answer in that category
+        - 10 pts for a unique valid answer
+        - 5 pts for a duplicate valid answer
+        - 0 pts if the answer was empty or rejected by majority vote
+      parameters:
+        - $ref: '#/components/parameters/RoomCode'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlayerIdRequest'
+      responses:
+        '200':
+          description: Round ended, next round started or game finished
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Not in reviewing phase
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Only host can end the round
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Room not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /rooms/{code}/reset:
+    post:
+      tags: [Gameplay]
+      operationId: resetToLobby
+      summary: Reset to lobby (host only)
+      description: |
+        Resets the room back to the lobby state. All game progress and scores are cleared.
+        Only the host can perform this action.
+      parameters:
+        - $ref: '#/components/parameters/RoomCode'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlayerIdRequest'
+      responses:
+        '200':
+          description: Room reset to lobby
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '403':
+          description: Only host can reset
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Room not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  parameters:
+    RoomCode:
+      name: code
+      in: path
+      required: true
+      description: 6-character alphanumeric room code
+      schema:
+        type: string
+        pattern: '^[A-Z0-9]{6}$'
+        example: "A1B2C3"
+
+  schemas:
+    # ── Request Schemas ──────────────────────────────────────
+
+    CreateRoomRequest:
+      type: object
+      required: [nick]
+      properties:
+        nick:
+          type: string
+          description: Nickname of the player creating the room (becomes host)
+          example: "Wojtek"
+        isPublic:
+          type: boolean
+          description: Whether the room is visible in the public room list
+          default: false
+          example: true
+
+    JoinRoomRequest:
+      type: object
+      required: [nick]
+      properties:
+        nick:
+          type: string
+          description: Nickname of the joining player
+          example: "Anna"
+
+    PlayerIdRequest:
+      type: object
+      required: [playerId]
+      properties:
+        playerId:
+          type: string
+          format: uuid
+          description: UUID of the player performing the action
+          example: "550e8400-e29b-41d4-a716-446655440000"
+
+    UpdateSettingsRequest:
+      type: object
+      required: [playerId, settings]
+      properties:
+        playerId:
+          type: string
+          format: uuid
+          description: UUID of the host player
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        settings:
+          $ref: '#/components/schemas/RoomSettings'
+
+    SubmitAnswersRequest:
+      type: object
+      required: [playerId, answers]
+      properties:
+        playerId:
+          type: string
+          format: uuid
+          description: UUID of the player submitting answers
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        answers:
+          type: object
+          additionalProperties:
+            type: string
+          description: "Map of category name → player's answer"
+          example:
+            Państwa: "Polska"
+            Miasta: "Poznań"
+            Zwierzęta: "Panda"
+
+    SubmitVoteRequest:
+      type: object
+      required: [voterId, targetPlayerId, category, isValid]
+      properties:
+        voterId:
+          type: string
+          format: uuid
+          description: UUID of the player casting the vote
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        targetPlayerId:
+          type: string
+          format: uuid
+          description: UUID of the player whose answer is being voted on
+          example: "661e8400-e29b-41d4-a716-446655440001"
+        category:
+          type: string
+          description: Category of the answer being voted on
+          example: "Miasta"
+        isValid:
+          type: boolean
+          description: Whether the voter considers the answer valid
+          example: true
+
+    # ── Response Schemas ─────────────────────────────────────
+
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
+          example: "Room not found"
+
+    JoinResponse:
+      type: object
+      properties:
+        code:
+          type: string
+          description: Room code
+          example: "A1B2C3"
+        playerId:
+          type: string
+          format: uuid
+          description: UUID assigned to the player
+          example: "550e8400-e29b-41d4-a716-446655440000"
+
+    PublicRoom:
+      type: object
+      properties:
+        code:
+          type: string
+          description: Room code
+          example: "A1B2C3"
+        hostNick:
+          type: string
+          description: Nickname of the room host
+          example: "Wojtek"
+        playersCount:
+          type: integer
+          description: Current number of players in the room
+          example: 3
+        maxPlayers:
+          type: integer
+          description: Maximum players allowed
+          example: 8
+
+    # ── Data Model Schemas ───────────────────────────────────
+
+    Player:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique player identifier
+        nick:
+          type: string
+          description: Player's nickname
+        isHost:
+          type: boolean
+          description: Whether this player is the room host
+
+    RoomSettings:
+      type: object
+      description: Configurable game settings (all fields optional for partial updates)
+      properties:
+        categories:
+          type: array
+          items:
+            type: string
+          description: List of category names for each round
+          example: ["Państwa", "Miasta", "Zwierzęta", "Rośliny", "Imiona"]
+        timePerRound:
+          type: integer
+          description: Time per round in minutes
+          minimum: 1
+          example: 1
+        rounds:
+          type: integer
+          description: Total number of rounds
+          minimum: 1
+          example: 5
+        maxPlayers:
+          type: integer
+          description: Maximum number of players
+          minimum: 2
+          maximum: 20
+          example: 8
+
+    GameState:
+      type: object
+      properties:
+        currentRound:
+          type: integer
+          description: Current round number (0 = not started)
+          example: 2
+        currentLetter:
+          type: string
+          description: The letter drawn for the current round
+          maxLength: 1
+          example: "P"
+        roundStartedAt:
+          type: integer
+          nullable: true
+          description: Unix timestamp (ms) when the round started
+          example: 1715450000000
+        stopTriggeredAt:
+          type: integer
+          nullable: true
+          description: Unix timestamp (ms) when stop was triggered (deprecated, see stoppedPlayers)
+        answers:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties:
+              type: string
+          description: "Map of playerId → { category → answer }"
+        votes:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties:
+              type: object
+              additionalProperties:
+                type: boolean
+          description: "Map of targetPlayerId → { category → { voterId → isValid } }"
+        stoppedPlayers:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: List of player IDs who have triggered stop
+        timeLeft:
+          type: integer
+          description: Always 0 (legacy field)
+          example: 0
+        mainTimeLeft:
+          type: integer
+          description: Seconds remaining in the current round (only meaningful during `playing` status)
+          example: 45
+
+    RoomState:
+      type: object
+      description: Complete room state returned by the polling endpoint
+      properties:
+        code:
+          type: string
+          description: Room code
+          example: "A1B2C3"
+        isPublic:
+          type: boolean
+          description: Whether the room is publicly listed
+        status:
+          type: string
+          enum: [lobby, playing, stopping, reviewing, finished]
+          description: |
+            Current phase of the room:
+            - `lobby` — waiting for players, settings can be changed
+            - `playing` — round in progress, players fill in answers
+            - `stopping` — stop triggered, waiting for remaining answers
+            - `reviewing` — players vote on answers
+            - `finished` — all rounds completed, final scores shown
+          example: "playing"
+        players:
+          type: array
+          items:
+            $ref: '#/components/schemas/Player'
+        scores:
+          type: object
+          additionalProperties:
+            type: integer
+          description: "Map of playerId → cumulative score"
+          example:
+            "550e8400-e29b-41d4-a716-446655440000": 35
+            "661e8400-e29b-41d4-a716-446655440001": 20
+        settings:
+          $ref: '#/components/schemas/RoomSettings'
+        game:
+          $ref: '#/components/schemas/GameState'
