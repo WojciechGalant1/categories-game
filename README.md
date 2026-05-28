@@ -18,16 +18,16 @@ flowchart LR
 
 Wszystko żyje w namespace `stop-app`.
 
-| Komponent  | Technologia                           | Folder           | Lab                    |
-| ---------- | ------------------------------------- | ---------------- | ---------------------- |
-| Frontend   | React 19 + Vite + Tailwind + nginx    | `frontend/`      | Lab 2, 8               |
-| Backend    | Express 5 + driver `mongodb`          | `backendTest/`   | Lab 2, 5, 8            |
-| Baza       | MongoDB 6 (StatefulSet + PVC)         | -                | Lab 4, 5               |
-| Ekspozycja | ingress-nginx, path-based             | `k8s/40-ingress` | Lab 3                  |
+| Komponent  | Technologia                           | Folder           | 
+| ---------- | ------------------------------------- | ---------------- | 
+| Frontend   | React 19 + Vite + Tailwind + nginx    | `frontend/`      | 
+| Backend    | Express 5 + driver `mongodb`          | `backendTest/`   | 
+| Baza       | MongoDB 6 (StatefulSet + PVC)         | -                | 
+| Ekspozycja | ingress-nginx, path-based             | `k8s/40-ingress` | 
 
 Frontend komunikuje się z backendem przez **relatywny** prefix `/api` (zob. [`frontend/src/services/api.ts`](frontend/src/services/api.ts)) — ten sam build chodzi za Ingressem niezależnie od hosta.
 
-## Struktura repo
+## Struktura 
 
 ```
 .
@@ -51,12 +51,12 @@ Frontend komunikuje się z backendem przez **relatywny** prefix `/api` (zob. [`f
 │   ├── 30-frontend-deployment.yaml
 │   ├── 31-frontend-service.yaml
 │   └── 40-ingress.yaml
-└── lab/                # instrukcje laboratoryjne (PDF)
+└── chat_export.json      # plik kontekstu LLM 
 ```
 
 ## Wymagania
 
-- `minikube` >= 1.38, `kubectl`, Docker (na WSL2 wystarcza Docker Desktop)
+- `minikube` >= 1.38, `kubectl`, Docker 
 - Lokalnie do dev: Node.js 18+, npm
 
 ## Uruchomienie w minikube
@@ -117,7 +117,7 @@ W **osobnym terminalu** (może wymagać sudo na WSL2):
 minikube tunnel
 ```
 
-Zostaw terminal otwarty — tunnel działa dopóki proces żyje.  
+Zostaw terminal otwarty, tunnel działa dopóki proces żyje.  
 Zweryfikuj, że serwis ma `EXTERNAL-IP`:
 
 ```bash
@@ -142,7 +142,7 @@ kubectl exec -n stop-app mongo-0 -- mongosh -u admin -p adminpass \
 
 Aplikacja w przeglądarce: <http://stop.local>
 
-### Komendy diagnostyczne (Lab 2 + 8)
+### Komendy diagnostyczne
 
 ```bash
 kubectl get all,pvc,ingress -n stop-app
@@ -172,30 +172,8 @@ Tabelka rzeczy, które mogą się chcieć zmienić.
 | Rozmiar wolumenu Mongo      | [`k8s/12-mongo-statefulset.yaml`](k8s/12-mongo-statefulset.yaml) (`volumeClaimTemplates`)   | 2Gi, `storageClassName: standard`                      |
 | Liczba replik frontendu     | [`k8s/30-frontend-deployment.yaml`](k8s/30-frontend-deployment.yaml)                        | 2 (stateless)                                          |
 | Liczba replik backendu      | [`k8s/21-backend-deployment.yaml`](k8s/21-backend-deployment.yaml)                          | 1 (timery auto-stop w pamięci procesu)                 |
-| Requests / limits CPU + RAM | Wszystkie Deployment/StatefulSet                                                            | zob. manifesty (Lab 8)                                 |
+| Requests / limits CPU + RAM | Wszystkie Deployment/StatefulSet                                                            | manifesty (Lab 8)                                 |
 | Routing / host              | [`k8s/40-ingress.yaml`](k8s/40-ingress.yaml)                                                | `host: stop.local`, `/api` -> backend, `/` -> frontend  |
-
-## Dev lokalnie (bez Kubernetes)
-
-Można uruchomić backend i frontend bezpośrednio, ale wtedy backend potrzebuje gdzieś Mongo (np. `docker run -d -p 27017:27017 mongo:6`).
-
-Backend:
-
-```bash
-cd backendTest
-npm install
-MONGO_URI='mongodb://localhost:27017' MONGO_DB=stop node index.js
-```
-
-Frontend (po refaktorze API używa relatywnego `/api`, więc musisz mieć proxy lub uruchomić backend pod tym samym originem):
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-W trybie dev wygodniej tymczasowo przywrócić `const API_URL = 'http://localhost:3000/api'` w [`frontend/src/services/api.ts`](frontend/src/services/api.ts) lub dodać proxy w `vite.config.ts`.
 
 ## API
 
@@ -212,8 +190,8 @@ Najważniejsze endpointy:
 
 Backend trzyma stan pokoi w kolekcji `rooms` w bazie `stop`, klucz dokumentu = `code` pokoju.
 
-## Znane ograniczenia
+## Ograniczenia
 
 - **Backend skaluje się tylko do 1 repliki.** Auto-stop rundy używa `setTimeout` w pamięci procesu — przy >1 replice każda miałaby własny zegar. Aby skalować, trzeba przenieść harmonogram do Mongo (`stopAt: Date`) i sprawdzać go przy każdym `GET /api/rooms/:code`.
-- **Po crashu Poda backendu** trwająca runda zostaje w stanie `playing` aż host kliknie `next-round` — z tego samego powodu (timer ginie razem z procesem). Stan rozgrywki (gracze, odpowiedzi, wyniki) jest bezpieczny — siedzi w Mongo na PVC.
+- **Po crashu Poda backendu** trwająca runda zostaje w stanie `playing` aż host kliknie `next-round` — z tego samego powodu (timer ginie razem z procesem). Stan rozgrywki (gracze, odpowiedzi, wyniki) jest bezpieczny, siedzi w Mongo na PVC.
 - **Reklady Mongo**: PVC `mongo-data-mongo-0` przeżywa restart Poda, ale `kubectl delete -f k8s/` usuwa też StatefulSet — PVC zostaje (`Retain` zachowanie standardowego StorageClassa w minikube) i zostanie ponownie zbindowany po re-applyu.
