@@ -86,31 +86,61 @@ kubectl wait --for=condition=Ready pod --all -n stop-app --timeout=180s
 kubectl get all,pvc,ingress -n stop-app
 ```
 
-### 4. Dostęp do aplikacji
+### 4. Patch ingress-nginx-controller na LoadBalancer
 
-Na WSL2 z driverem `docker` `minikube ip` (`192.168.49.2`) nie jest routowalne z hosta. Najprostszy sposób to port-forward kontrolera Ingress na localhost:
+`minikube tunnel` przypisuje `EXTERNAL-IP` wyłącznie serwisom typu `LoadBalancer`. Domyślny addon tworzy serwis `NodePort`, więc patch jest wymagany jednorazowo po każdym świeżym starcie klastra:
 
 ```bash
-kubectl port-forward -n ingress-nginx svc/ingress-nginx-controller 8080:80
+kubectl patch svc ingress-nginx-controller \
+  -n ingress-nginx \
+  -p '{"spec":{"type":"LoadBalancer"}}'
 ```
 
-Aplikacja: <http://localhost:8080/>, API: <http://localhost:8080/api/rooms>.
+### 5. Wpis w `/etc/hosts`
 
-Alternatywa: `minikube tunnel` (osobny terminal, wymaga sudo) + wpis `$(minikube ip) stop.local` w `/etc/hosts`. Wymagałoby też przywrócenia `host: stop.local` w [`k8s/40-ingress.yaml`](k8s/40-ingress.yaml) — w obecnej wersji Ingress jest catch-all (zob. Laboratorium 3, wariant path-based bez `host:`).
-
-### 5. Weryfikacja end-to-end
+Po uruchomieniu tunnela (krok 6) serwis dostanie `EXTERNAL-IP = 127.0.0.1`. Dodaj wpis raz na stałe:
 
 ```bash
-curl http://localhost:8080/                                                # frontend -> 200
-curl http://localhost:8080/api/rooms                                       # backend -> []
+# WSL2
+echo "127.0.0.1 stop.local" | sudo tee -a /etc/hosts
+
+# Windows (przeglądarka Windows) — edytuj jako Administrator:
+# C:\Windows\System32\drivers\etc\hosts
+# 127.0.0.1 stop.local
+```
+
+### 6. Uruchomienie tunnela
+
+W **osobnym terminalu** (może wymagać sudo na WSL2):
+
+```bash
+minikube tunnel
+```
+
+Zostaw terminal otwarty — tunnel działa dopóki proces żyje.  
+Zweryfikuj, że serwis ma `EXTERNAL-IP`:
+
+```bash
+kubectl get svc -n ingress-nginx ingress-nginx-controller
+# NAME                       TYPE           CLUSTER-IP     EXTERNAL-IP   PORT(S)
+# ingress-nginx-controller   LoadBalancer   10.x.x.x       127.0.0.1     80:xxxxx/TCP,443:xxxxx/TCP
+```
+
+### 7. Weryfikacja end-to-end
+
+```bash
+curl http://stop.local/                              # frontend -> 200
+curl http://stop.local/api/rooms                     # backend -> []
 curl -X POST -H 'Content-Type: application/json' \
      -d '{"nick":"tester","isPublic":true}' \
-     http://localhost:8080/api/rooms                                       # backend -> {code, playerId}
-curl http://localhost:8080/api/rooms                                       # zwraca utworzony pokoj
+     http://stop.local/api/rooms                     # backend -> {code, playerId}
+curl http://stop.local/api/rooms                     # zwraca utworzony pokoj
 kubectl exec -n stop-app mongo-0 -- mongosh -u admin -p adminpass \
      --authenticationDatabase admin --quiet \
-     --eval 'db.getSiblingDB("stop").rooms.find({}).toArray()'             # dokument w bazie
+     --eval 'db.getSiblingDB("stop").rooms.find({}).toArray()'  # dokument w bazie
 ```
+
+Aplikacja w przeglądarce: <http://stop.local>
 
 ### Komendy diagnostyczne (Lab 2 + 8)
 
@@ -120,8 +150,8 @@ kubectl logs -n stop-app deploy/backend -f
 kubectl logs -n stop-app statefulset/mongo
 kubectl describe pod -n stop-app mongo-0
 kubectl exec -it -n stop-app mongo-0 -- mongosh -u admin -p adminpass
-kubectl top pod -n stop-app                  # wymaga `minikube addons enable metrics-server`
-kubectl port-forward -n stop-app svc/backend-svc 3000:3000   # debug API bez Ingressa
+kubectl top pod -n stop-app                            # wymaga `minikube addons enable metrics-server`
+kubectl port-forward -n stop-app svc/backend-svc 3000:3000   # debug API bez Ingressa i tunnela
 ```
 
 ### Sprzątanie
@@ -143,7 +173,7 @@ Tabelka rzeczy, które mogą się chcieć zmienić.
 | Liczba replik frontendu     | [`k8s/30-frontend-deployment.yaml`](k8s/30-frontend-deployment.yaml)                        | 2 (stateless)                                          |
 | Liczba replik backendu      | [`k8s/21-backend-deployment.yaml`](k8s/21-backend-deployment.yaml)                          | 1 (timery auto-stop w pamięci procesu)                 |
 | Requests / limits CPU + RAM | Wszystkie Deployment/StatefulSet                                                            | zob. manifesty (Lab 8)                                 |
-| Routing / host              | [`k8s/40-ingress.yaml`](k8s/40-ingress.yaml)                                                | catch-all path-based: `/api` -> backend, `/` -> frontend |
+| Routing / host              | [`k8s/40-ingress.yaml`](k8s/40-ingress.yaml)                                                | `host: stop.local`, `/api` -> backend, `/` -> frontend  |
 
 ## Dev lokalnie (bez Kubernetes)
 
