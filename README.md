@@ -203,5 +203,3 @@ kubectl logs deploy/panstwa-miasta-frontend
 kubectl describe pod -l app=panstwa-miasta-backend
 ```
 
-## API
-- Specyfikacja OpenAPI: `backendTest/openapi.yaml`\n+- Bazowy adres lokalnie: `http://localhost:3000/api`\n+\n+Przykładowe endpointy:\n+- `GET /api/rooms` — lista publicznych pokoi\n+- `POST /api/rooms` — utworzenie pokoju\n+- `GET /api/rooms/:code` — stan pokoju (polling)\n+\n+Pełny opis request/response znajdziesz w `backendTest/openapi.yaml`.\n+\n+## Struktura projektu\n+- `backendTest/` — backend Express (`index.js`), spec API (`openapi.yaml`), zależności npm\n+- `frontend/` — aplikacja React/Vite (routing/komponenty, komunikacja z API w `src/services/api.ts`)\n+- `chat_export.json` — eksport rozmowy (artefakt pomocniczy)\n*** End Patch"}评论 to=functions.ApplyPatch  微信天天彩票 مطابق=json to=functions.ApplyPatch code
