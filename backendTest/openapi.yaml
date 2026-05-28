@@ -20,7 +20,7 @@ info:
     - **0 pts** — empty or rejected by votes
 
     ## Persistence (MongoDB)
-    Room state is persisted in a MongoDB collection (`rooms` in database `stop`).
+    Room state is persisted in a MongoDB collection (`rooms` in database `pm`).
     Each room is stored as a single document whose `_id` equals the room `code`.
     Reads use `findOne({ _id: code })` and writes use `replaceOne({...}, room, { upsert: true })`,
     so every state-changing endpoint performs one read and one write against Mongo.
@@ -782,7 +782,7 @@ components:
       description: |
         Complete room state returned by the polling endpoint.
 
-        This document is stored 1:1 in MongoDB (collection `rooms`, database `stop`).
+        This document is stored 1:1 in MongoDB (collection `rooms`, database `pm`).
         The `_id` field is MongoDB's primary key and is always equal to `code` — clients
         can ignore `_id` and rely on `code` exclusively.
       properties:

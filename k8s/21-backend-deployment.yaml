@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: backend
-  namespace: stop-app
+  namespace: pm-app
   labels:
     app: backend
 spec:
@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: backend
-          image: stop-backend:2.0
+          image: pm-backend:2.0
           imagePullPolicy: Never
           ports:
             - containerPort: 3000

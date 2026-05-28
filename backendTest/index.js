@@ -6,7 +6,7 @@ const { MongoClient } = require('mongodb');
 const app = express();
 const PORT = parseInt(process.env.PORT, 10) || 3000;
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://admin:adminpass@localhost:27017/?authSource=admin';
-const MONGO_DB = process.env.MONGO_DB || 'stop';
+const MONGO_DB = process.env.MONGO_DB || 'pm';
 
 app.use(cors());
 app.use(express.json());
