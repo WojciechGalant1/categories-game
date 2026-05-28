@@ -181,12 +181,12 @@ Specyfikacja OpenAPI: [`backendTest/openapi.yaml`](backendTest/openapi.yaml).
 
 Najważniejsze endpointy:
 
-- `GET /api/rooms` — lista publicznych pokoi w lobby
-- `POST /api/rooms` — utworzenie pokoju (`{nick, isPublic}`)
-- `POST /api/rooms/:code/join` — dołączenie do pokoju
-- `GET /api/rooms/:code` — pełny stan pokoju (używane do pollingu)
-- `POST /api/rooms/:code/settings` — zmiana ustawień (host)
-- `POST /api/rooms/:code/start` / `/stop` / `/answers` / `/vote` / `/next-round` / `/reset` — przebieg gry
+- `GET /api/rooms` - lista publicznych pokoi w lobby
+- `POST /api/rooms` - utworzenie pokoju (`{nick, isPublic}`)
+- `POST /api/rooms/:code/join` - dołączenie do pokoju
+- `GET /api/rooms/:code` - pełny stan pokoju (używane do pollingu)
+- `POST /api/rooms/:code/settings` - zmiana ustawień (host)
+- `POST /api/rooms/:code/start` / `/stop` / `/answers` / `/vote` / `/next-round` / `/reset` - przebieg gry
 
 Backend trzyma stan pokoi w kolekcji `rooms` w bazie `stop`, klucz dokumentu = `code` pokoju.
 
