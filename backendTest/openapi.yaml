@@ -29,9 +29,20 @@ info:
     injected from a `ConfigMap` (`backend-config`) and `Secret` (`mongo-credentials`) in Kubernetes.
     The backend retries the initial connection every 2 s until Mongo is reachable.
 
-    Auto-stop timers (`setTimeout`) live in the backend process memory rather than in Mongo —
-    after a Pod restart, an in-progress round stays in `playing` until the host manually advances it.
-    Persisted state (players, answers, votes, scores) is unaffected by restarts.
+    ## Scalable auto-stop
+    Round expiry is stored as `game.roundEndsAt` (Unix ms) in the room document — there are no
+    in-process timers. On every `GET /api/rooms/:code` poll the backend atomically executes:
+
+    ```
+    updateOne(
+      { _id: code, status: 'playing', 'game.roundEndsAt': { $lte: now } },
+      { $set: { status: 'reviewing' } }
+    )
+    ```
+
+    Because the filter includes `status: 'playing'`, MongoDB guarantees the write happens
+    at most once even when multiple backend replicas poll concurrently. This allows the backend
+    Deployment to scale to any number of replicas without split-brain timer issues.
   version: 1.0.0
   contact:
     name: Państwa Miasta Dev Team
@@ -119,11 +130,15 @@ paths:
         Used by the frontend for polling to keep the UI in sync.
 
         When the room is in `playing` status, the response includes `mainTimeLeft`
-        (seconds remaining in the round) computed from `roundStartedAt` and `settings.timePerRound`.
+        (seconds remaining in the round) computed directly from the persisted `game.roundEndsAt`
+        field: `max(0, floor((roundEndsAt - now) / 1000))`.
 
-        Implemented as `db.rooms.findOne({ _id: code })`. The MongoDB document is returned
-        as-is plus the computed `mainTimeLeft`, so the response includes `_id` (always equal
-        to `code`) alongside the regular fields.
+        Before loading the room, the endpoint atomically transitions it to `reviewing` if
+        `game.roundEndsAt ≤ now` (see the "Scalable auto-stop" section in the API description).
+
+        Implemented as `db.rooms.findOne({ _id: code })` after the optional auto-stop update.
+        The MongoDB document is returned as-is plus the computed `mainTimeLeft`, so the response
+        includes `_id` (always equal to `code`) alongside the regular fields.
       parameters:
         - $ref: '#/components/parameters/RoomCode'
       responses:
@@ -228,9 +243,9 @@ paths:
         On the first round, all player scores are reset to 0.
 
         The room document in MongoDB is updated with the new `status`, `currentRound`,
-        `currentLetter`, `roundStartedAt` and cleared `answers`/`votes`/`stoppedPlayers`.
-        The auto-stop timer is **not** persisted — it lives only in the backend process memory,
-        which means it won't survive a backend Pod restart.
+        `currentLetter`, `roundStartedAt`, `roundEndsAt` and cleared `answers`/`votes`/`stoppedPlayers`.
+        `roundEndsAt` is set to `roundStartedAt + settings.timePerRound * 60 000` ms and is used
+        by the polling endpoint for atomic auto-stop (no in-process timers).
       parameters:
         - $ref: '#/components/parameters/RoomCode'
       requestBody:
@@ -414,9 +429,9 @@ paths:
         '200':
           description: |
             Round ended; the next round is started or the game is marked `finished`.
-            Updated `scores`, `currentRound`, `currentLetter`, `roundStartedAt`,
+            Updated `scores`, `currentRound`, `currentLetter`, `roundStartedAt`, `roundEndsAt`,
             and cleared `answers`/`votes`/`stoppedPlayers` are persisted to MongoDB
-            in a single `replaceOne`.
+            in a single `replaceOne`. `roundEndsAt` is set to `null` when the game finishes.
           content:
             application/json:
               schema:
@@ -708,6 +723,16 @@ components:
           nullable: true
           description: Unix timestamp (ms) when the round started
           example: 1715450000000
+        roundEndsAt:
+          type: integer
+          nullable: true
+          description: |
+            Unix timestamp (ms) when the round will automatically end.
+            Set to `roundStartedAt + settings.timePerRound * 60 000` when a round starts;
+            reset to `null` when the game finishes or the room is reset to lobby.
+            The polling endpoint uses this field for atomic server-side auto-stop —
+            no in-process timers are involved, enabling horizontal backend scaling.
+          example: 1715450060000
         stopTriggeredAt:
           type: integer
           nullable: true
@@ -746,7 +771,10 @@ components:
           example: 0
         mainTimeLeft:
           type: integer
-          description: Seconds remaining in the current round (only meaningful during `playing` status)
+          description: |
+            Seconds remaining in the current round (only meaningful during `playing` status).
+            Computed server-side as `max(0, floor((game.roundEndsAt - now) / 1000))` and
+            included in the response alongside the persisted document fields.
           example: 45
 
     RoomState:
