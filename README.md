@@ -16,7 +16,6 @@ flowchart LR
     mongoSs --> pvc[(PVC 2Gi<br/>storageClass standard)]
 ```
 
-Wszystko żyje w namespace `pm-app`.
 
 | Komponent  | Technologia                           | Folder           | 
 | ---------- | ------------------------------------- | ---------------- | 
