@@ -3,7 +3,7 @@ info:
   title: Państwa Miasta - Game API
   description: |
     REST API for the "Państwa Miasta" (Countries & Cities) multiplayer word game.
-    
+
     ## Game Flow
     1. Host creates a room → players join via room code
     2. Host configures settings (categories, time, rounds)
@@ -12,19 +12,37 @@ info:
     5. Players click "Send answers" (or time runs out) → transition to reviewing
     6. Players review and vote on each other's answers
     7. Host ends the round → scores are calculated → next round or finish
-    
+
     ## Scoring
     - **15 pts** — only player with a valid answer in that category
     - **10 pts** — unique valid answer (different from others)
     - **5 pts** — duplicate valid answer (same as another player)
     - **0 pts** — empty or rejected by votes
+
+    ## Persistence (MongoDB)
+    Room state is persisted in a MongoDB collection (`rooms` in database `stop`).
+    Each room is stored as a single document whose `_id` equals the room `code`.
+    Reads use `findOne({ _id: code })` and writes use `replaceOne({...}, room, { upsert: true })`,
+    so every state-changing endpoint performs one read and one write against Mongo.
+
+    Connection parameters come from environment variables (`MONGO_URI`, `MONGO_DB`),
+    injected from a `ConfigMap` (`backend-config`) and `Secret` (`mongo-credentials`) in Kubernetes.
+    The backend retries the initial connection every 2 s until Mongo is reachable.
+
+    Auto-stop timers (`setTimeout`) live in the backend process memory rather than in Mongo —
+    after a Pod restart, an in-progress round stays in `playing` until the host manually advances it.
+    Persisted state (players, answers, votes, scores) is unaffected by restarts.
   version: 1.0.0
   contact:
     name: Państwa Miasta Dev Team
 
 servers:
   - url: http://localhost:3000/api
-    description: Local development server
+    description: Local development server (backend running directly with `node index.js`)
+  - url: http://localhost:8080/api
+    description: Minikube cluster via `kubectl port-forward svc/ingress-nginx-controller 8080:80`
+  - url: /api
+    description: Same-origin (frontend served behind the same Ingress)
 
 tags:
   - name: Rooms
@@ -43,7 +61,9 @@ paths:
       description: Returns all public rooms that are currently in the lobby phase (waiting for players).
       responses:
         '200':
-          description: List of public rooms
+          description: |
+            List of public rooms.
+            Backed by `db.rooms.find({ isPublic: true, status: 'lobby' })`.
           content:
             application/json:
               schema:
@@ -55,6 +75,8 @@ paths:
                   hostNick: "Wojtek"
                   playersCount: 3
                   maxPlayers: 8
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
     post:
       tags: [Rooms]
@@ -69,7 +91,9 @@ paths:
               $ref: '#/components/schemas/CreateRoomRequest'
       responses:
         '200':
-          description: Room created successfully
+          description: |
+            Room created successfully. A new document is inserted into the `rooms` collection
+            with `_id` equal to the generated `code` (`replaceOne(..., { upsert: true })`).
           content:
             application/json:
               schema:
@@ -82,6 +106,8 @@ paths:
                 $ref: '#/components/schemas/Error'
               example:
                 error: "Nick is required"
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
   /rooms/{code}:
     get:
@@ -91,9 +117,13 @@ paths:
       description: |
         Returns the full state of the room including players, settings, game state, and scores.
         Used by the frontend for polling to keep the UI in sync.
-        
-        When the room is in `playing` status, the response includes `mainTimeLeft` 
-        (seconds remaining in the round).
+
+        When the room is in `playing` status, the response includes `mainTimeLeft`
+        (seconds remaining in the round) computed from `roundStartedAt` and `settings.timePerRound`.
+
+        Implemented as `db.rooms.findOne({ _id: code })`. The MongoDB document is returned
+        as-is plus the computed `mainTimeLeft`, so the response includes `_id` (always equal
+        to `code`) alongside the regular fields.
       parameters:
         - $ref: '#/components/parameters/RoomCode'
       responses:
@@ -104,13 +134,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/RoomState'
         '404':
-          description: Room not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-              example:
-                error: "Room not found"
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
   /rooms/{code}/join:
     post:
@@ -118,8 +144,10 @@ paths:
       operationId: joinRoom
       summary: Join a room
       description: |
-        Join an existing room by its code. If a player with the same nick already exists 
+        Join an existing room by its code. If a player with the same nick already exists
         in the room, the existing player ID is returned (reconnect behavior).
+
+        Performs one `findOne` and (on success) one `replaceOne` against the `rooms` collection.
       parameters:
         - $ref: '#/components/parameters/RoomCode'
       requestBody:
@@ -142,11 +170,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Room not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
   /rooms/{code}/settings:
     post:
@@ -167,7 +193,7 @@ paths:
               $ref: '#/components/schemas/UpdateSettingsRequest'
       responses:
         '200':
-          description: Settings updated
+          description: Settings updated (room document overwritten in MongoDB)
           content:
             application/json:
               schema:
@@ -185,11 +211,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Room not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
   /rooms/{code}/start:
     post:
@@ -198,10 +222,15 @@ paths:
       summary: Start the game / next round
       description: |
         Starts the game (or next round after reviewing). Only the host can start the game.
-        A random letter is drawn, the round timer begins, and when time expires 
+        A random letter is drawn, the round timer begins, and when time expires
         the status automatically transitions to `reviewing`.
-        
+
         On the first round, all player scores are reset to 0.
+
+        The room document in MongoDB is updated with the new `status`, `currentRound`,
+        `currentLetter`, `roundStartedAt` and cleared `answers`/`votes`/`stoppedPlayers`.
+        The auto-stop timer is **not** persisted — it lives only in the backend process memory,
+        which means it won't survive a backend Pod restart.
       parameters:
         - $ref: '#/components/parameters/RoomCode'
       requestBody:
@@ -230,11 +259,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Room not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
   /rooms/{code}/stop:
     post:
@@ -254,7 +281,9 @@ paths:
               $ref: '#/components/schemas/PlayerIdRequest'
       responses:
         '200':
-          description: Stop registered
+          description: |
+            Stop registered. The player id is appended to `game.stoppedPlayers`
+            in the persisted room document.
           content:
             application/json:
               schema:
@@ -272,11 +301,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Room not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
   /rooms/{code}/answers:
     post:
@@ -304,17 +331,17 @@ paths:
                 Imiona: "Patrycja"
       responses:
         '200':
-          description: Answers submitted
+          description: |
+            Answers submitted. The player's answers map is stored under
+            `game.answers[playerId]` in the room document.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
         '404':
-          description: Room not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
   /rooms/{code}/vote:
     post:
@@ -337,7 +364,9 @@ paths:
               $ref: '#/components/schemas/SubmitVoteRequest'
       responses:
         '200':
-          description: Vote recorded
+          description: |
+            Vote recorded under `game.votes[targetPlayerId][category][voterId]`
+            in the persisted room document.
           content:
             application/json:
               schema:
@@ -355,11 +384,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Room not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
   /rooms/{code}/next-round:
     post:
@@ -385,7 +412,11 @@ paths:
               $ref: '#/components/schemas/PlayerIdRequest'
       responses:
         '200':
-          description: Round ended, next round started or game finished
+          description: |
+            Round ended; the next round is started or the game is marked `finished`.
+            Updated `scores`, `currentRound`, `currentLetter`, `roundStartedAt`,
+            and cleared `answers`/`votes`/`stoppedPlayers` are persisted to MongoDB
+            in a single `replaceOne`.
           content:
             application/json:
               schema:
@@ -403,11 +434,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Room not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
   /rooms/{code}/reset:
     post:
@@ -427,7 +456,10 @@ paths:
               $ref: '#/components/schemas/PlayerIdRequest'
       responses:
         '200':
-          description: Room reset to lobby
+          description: |
+            Room reset to lobby. All in-progress game fields are cleared and
+            scores are zeroed in the persisted document. The room itself is **not**
+            removed from MongoDB.
           content:
             application/json:
               schema:
@@ -439,11 +471,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          description: Room not found
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
 
 components:
   parameters:
@@ -456,6 +486,27 @@ components:
         type: string
         pattern: '^[A-Z0-9]{6}$'
         example: "A1B2C3"
+
+  responses:
+    InternalServerError:
+      description: |
+        Unexpected backend error. In practice this is most often a MongoDB
+        connectivity or query failure (the backend logs the original error and
+        returns a generic message to the client).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Internal server error"
+    NotFound:
+      description: Room does not exist in the database
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: "Room not found"
 
   schemas:
     # ── Request Schemas ──────────────────────────────────────
@@ -657,6 +708,15 @@ components:
           nullable: true
           description: Unix timestamp (ms) when the round started
           example: 1715450000000
+        stopTriggeredAt:
+          type: integer
+          nullable: true
+          description: |
+            Unix timestamp (ms) when STOP was triggered.
+
+            This field is currently stored in the room document by the backend (often `null`),
+            but it is not actively used by the game flow logic.
+          example: 1715450005000
 
         answers:
           type: object
@@ -691,8 +751,19 @@ components:
 
     RoomState:
       type: object
-      description: Complete room state returned by the polling endpoint
+      description: |
+        Complete room state returned by the polling endpoint.
+
+        This document is stored 1:1 in MongoDB (collection `rooms`, database `stop`).
+        The `_id` field is MongoDB's primary key and is always equal to `code` — clients
+        can ignore `_id` and rely on `code` exclusively.
       properties:
+        _id:
+          type: string
+          description: |
+            MongoDB document identifier. Always equal to `code` and present in
+            the response because the backend returns the stored document as-is.
+          example: "A1B2C3"
         code:
           type: string
           description: Room code
@@ -702,11 +773,12 @@ components:
           description: Whether the room is publicly listed
         status:
           type: string
-          enum: [lobby, playing, reviewing, finished]
+          enum: [lobby, playing, stopping, reviewing, finished]
           description: |
             Current phase of the room:
             - `lobby` — waiting for players, settings can be changed
             - `playing` — round in progress, players fill in answers
+            - `stopping` — legacy/compatibility state (not actively used by current backend logic)
             - `reviewing` — players vote on answers
             - `finished` — all rounds completed, final scores shown
           example: "playing"
