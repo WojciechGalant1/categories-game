@@ -171,8 +171,8 @@ Tabelka rzeczy, które mogą się chcieć zmienić.
 | Nazwa bazy, port, host Mongo| [`k8s/20-backend-configmap.yaml`](k8s/20-backend-configmap.yaml)                            | `stop`, `27017`, `mongo-0.mongo.stop-app.svc...`       |
 | Rozmiar wolumenu Mongo      | [`k8s/12-mongo-statefulset.yaml`](k8s/12-mongo-statefulset.yaml) (`volumeClaimTemplates`)   | 2Gi, `storageClassName: standard`                      |
 | Liczba replik frontendu     | [`k8s/30-frontend-deployment.yaml`](k8s/30-frontend-deployment.yaml)                        | 2 (stateless)                                          |
-| Liczba replik backendu      | [`k8s/21-backend-deployment.yaml`](k8s/21-backend-deployment.yaml)                          | 1 (timery auto-stop w pamięci procesu)                 |
-| Requests / limits CPU + RAM | Wszystkie Deployment/StatefulSet                                                            | manifesty (Lab 8)                                 |
+| Liczba replik backendu      | [`k8s/21-backend-deployment.yaml`](k8s/21-backend-deployment.yaml)                          | 2 (auto-stop trzymany w MongoDB — skalowalne)          |
+| Requests / limits CPU + RAM | Wszystkie Deployment/StatefulSet                                                            | zob. manifesty (Lab 8)                                 |
 | Routing / host              | [`k8s/40-ingress.yaml`](k8s/40-ingress.yaml)                                                | `host: stop.local`, `/api` -> backend, `/` -> frontend  |
 
 ## API
@@ -192,6 +192,17 @@ Backend trzyma stan pokoi w kolekcji `rooms` w bazie `stop`, klucz dokumentu = `
 
 ## Ograniczenia
 
-- **Backend skaluje się tylko do 1 repliki.** Auto-stop rundy używa `setTimeout` w pamięci procesu — przy >1 replice każda miałaby własny zegar. Aby skalować, trzeba przenieść harmonogram do Mongo (`stopAt: Date`) i sprawdzać go przy każdym `GET /api/rooms/:code`.
-- **Po crashu Poda backendu** trwająca runda zostaje w stanie `playing` aż host kliknie `next-round` — z tego samego powodu (timer ginie razem z procesem). Stan rozgrywki (gracze, odpowiedzi, wyniki) jest bezpieczny, siedzi w Mongo na PVC.
 - **Reklady Mongo**: PVC `mongo-data-mongo-0` przeżywa restart Poda, ale `kubectl delete -f k8s/` usuwa też StatefulSet — PVC zostaje (`Retain` zachowanie standardowego StorageClassa w minikube) i zostanie ponownie zbindowany po re-applyu.
+
+## Architektura auto-stop
+
+Czas trwania rundy jest przechowywany jako `game.roundEndsAt` (Unix ms) w dokumencie MongoDB — **brak timerów w pamięci procesu**. Przy każdym pollu `GET /api/rooms/:code` backend wykonuje atomowe:
+
+```js
+updateOne(
+  { _id: code, status: 'playing', 'game.roundEndsAt': { $lte: now } },
+  { $set: { status: 'reviewing' } }
+)
+```
+
+MongoDB gwarantuje, że zapis wykona się co najwyżej raz, nawet gdy kilka replik backendu odpowiada równolegle. Dzięki temu Deployment backendu można swobodnie skalować (`replicas: 2` i więcej).

@@ -38,18 +38,6 @@ const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
 const generateRoomCode = () => Math.random().toString(36).substring(2, 8).toUpperCase();
 const getRandomLetter = () => ALPHABET[Math.floor(Math.random() * ALPHABET.length)];
 
-// Auto-stop timers live only in process memory; with a single backend replica this is fine.
-// After a Pod restart an in-progress round will simply stay in "playing" until the host
-// clicks the next-round button manually.
-function scheduleAutoStop(code, roundIdx, timePerRoundMin) {
-    setTimeout(async () => {
-        const room = await loadRoom(code);
-        if (room && room.status === 'playing' && room.game.currentRound === roundIdx) {
-            room.status = 'reviewing';
-            await saveRoom(room);
-        }
-    }, timePerRoundMin * 60 * 1000);
-}
 
 // 1. GET /api/rooms - List public rooms in lobby
 app.get('/api/rooms', async (req, res) => {
@@ -89,6 +77,7 @@ app.post('/api/rooms', async (req, res) => {
             currentRound: 0,
             currentLetter: '',
             roundStartedAt: null,
+            roundEndsAt: null,
             stopTriggeredAt: null,
             answers: {},
             votes: {},
@@ -127,14 +116,21 @@ app.post('/api/rooms/:code/join', async (req, res) => {
 // 4. GET /api/rooms/:code - Get room state (POLLING)
 app.get('/api/rooms/:code', async (req, res) => {
     const { code } = req.params;
+    const now = Date.now();
+
+    // Atomically transition to "reviewing" when the round timer has expired.
+    // The filter ensures only one replica performs the write even under concurrent polls.
+    await roomsCol.updateOne(
+        { _id: code, status: 'playing', 'game.roundEndsAt': { $lte: now } },
+        { $set: { status: 'reviewing' } }
+    );
+
     const room = await loadRoom(code);
     if (!room) return res.status(404).json({ error: 'Room not found' });
 
     let mainTimeLeft = 0;
-    if (room.status === 'playing' && room.game.roundStartedAt) {
-        const elapsed = Date.now() - room.game.roundStartedAt;
-        const maxTimeMs = room.settings.timePerRound * 60 * 1000;
-        mainTimeLeft = Math.max(0, Math.floor((maxTimeMs - elapsed) / 1000));
+    if (room.status === 'playing' && room.game.roundEndsAt) {
+        mainTimeLeft = Math.max(0, Math.floor((room.game.roundEndsAt - now) / 1000));
     }
 
     res.json({ ...room, game: { ...room.game, timeLeft: 0, mainTimeLeft } });
@@ -171,6 +167,7 @@ app.post('/api/rooms/:code/start', async (req, res) => {
     room.game.currentRound += 1;
     room.game.currentLetter = getRandomLetter();
     room.game.roundStartedAt = Date.now();
+    room.game.roundEndsAt = room.game.roundStartedAt + room.settings.timePerRound * 60 * 1000;
     room.game.stopTriggeredAt = null;
     room.game.answers = {};
     room.game.votes = {};
@@ -182,8 +179,6 @@ app.post('/api/rooms/:code/start', async (req, res) => {
     }
 
     await saveRoom(room);
-    scheduleAutoStop(code, room.game.currentRound, room.settings.timePerRound);
-
     res.json({ success: true });
 });
 
@@ -308,26 +303,22 @@ app.post('/api/rooms/:code/next-round', async (req, res) => {
         });
     });
 
-    let scheduleNext = false;
     if (room.game.currentRound < room.settings.rounds) {
         room.status = 'playing';
         room.game.currentRound += 1;
         room.game.currentLetter = getRandomLetter();
         room.game.roundStartedAt = Date.now();
+        room.game.roundEndsAt = room.game.roundStartedAt + room.settings.timePerRound * 60 * 1000;
         room.game.stopTriggeredAt = null;
         room.game.answers = {};
         room.game.votes = {};
         room.game.stoppedPlayers = [];
-        scheduleNext = true;
     } else {
         room.status = 'finished';
+        room.game.roundEndsAt = null;
     }
 
     await saveRoom(room);
-    if (scheduleNext) {
-        scheduleAutoStop(code, room.game.currentRound, room.settings.timePerRound);
-    }
-
     res.json({ success: true });
 });
 
@@ -345,6 +336,7 @@ app.post('/api/rooms/:code/reset', async (req, res) => {
     room.game.currentRound = 0;
     room.game.currentLetter = '';
     room.game.roundStartedAt = null;
+    room.game.roundEndsAt = null;
     room.game.stopTriggeredAt = null;
     room.game.answers = {};
     room.game.votes = {};
