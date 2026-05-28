@@ -1,12 +1,12 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: stop-ingress
-  namespace: stop-app
+  name: pm-ingress
+  namespace: pm-app
 spec:
   ingressClassName: nginx
   rules:
-    - host: stop.local
+    - host: pm.local
       http:
         paths:
           - path: /api

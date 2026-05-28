@@ -16,7 +16,7 @@ flowchart LR
     mongoSs --> pvc[(PVC 2Gi<br/>storageClass standard)]
 ```
 
-Wszystko żyje w namespace `stop-app`.
+Wszystko żyje w namespace `pm-app`.
 
 | Komponent  | Technologia                           | Folder           | 
 | ---------- | ------------------------------------- | ---------------- | 
@@ -74,16 +74,16 @@ Dzięki temu Kubernetes znajduje obrazy lokalnie i nie próbuje ich ściągać z
 
 ```bash
 eval $(minikube -p minikube docker-env --shell bash)
-docker build -t stop-backend:1.0 backendTest/
-docker build -t stop-frontend:1.0 frontend/
+docker build -t pm-backend:2.0 backendTest/
+docker build -t pm-frontend:1.0 frontend/
 ```
 
 ### 3. Apply manifestów
 
 ```bash
 kubectl apply -f k8s/
-kubectl wait --for=condition=Ready pod --all -n stop-app --timeout=180s
-kubectl get all,pvc,ingress -n stop-app
+kubectl wait --for=condition=Ready pod --all -n pm-app --timeout=180s
+kubectl get all,pvc,ingress -n pm-app
 ```
 
 ### 4. Patch ingress-nginx-controller na LoadBalancer
@@ -102,11 +102,11 @@ Po uruchomieniu tunnela (krok 6) serwis dostanie `EXTERNAL-IP = 127.0.0.1`. Doda
 
 ```bash
 # WSL2
-echo "127.0.0.1 stop.local" | sudo tee -a /etc/hosts
+echo "127.0.0.1 pm.local" | sudo tee -a /etc/hosts
 
 # Windows (przeglądarka Windows) — edytuj jako Administrator:
 # C:\Windows\System32\drivers\etc\hosts
-# 127.0.0.1 stop.local
+# 127.0.0.1 pm.local
 ```
 
 ### 6. Uruchomienie tunnela
@@ -129,29 +129,29 @@ kubectl get svc -n ingress-nginx ingress-nginx-controller
 ### 7. Weryfikacja end-to-end
 
 ```bash
-curl http://stop.local/                              # frontend -> 200
-curl http://stop.local/api/rooms                     # backend -> []
+curl http://pm.local/                              # frontend -> 200
+curl http://pm.local/api/rooms                     # backend -> []
 curl -X POST -H 'Content-Type: application/json' \
      -d '{"nick":"tester","isPublic":true}' \
-     http://stop.local/api/rooms                     # backend -> {code, playerId}
-curl http://stop.local/api/rooms                     # zwraca utworzony pokoj
-kubectl exec -n stop-app mongo-0 -- mongosh -u admin -p adminpass \
+     http://pm.local/api/rooms                     # backend -> {code, playerId}
+curl http://pm.local/api/rooms                     # zwraca utworzony pokoj
+kubectl exec -n pm-app mongo-0 -- mongosh -u admin -p adminpass \
      --authenticationDatabase admin --quiet \
-     --eval 'db.getSiblingDB("stop").rooms.find({}).toArray()'  # dokument w bazie
+     --eval 'db.getSiblingDB("pm").rooms.find({}).toArray()'  # dokument w bazie
 ```
 
-Aplikacja w przeglądarce: <http://stop.local>
+Aplikacja w przeglądarce: <http://pm.local>
 
 ### Komendy diagnostyczne
 
 ```bash
-kubectl get all,pvc,ingress -n stop-app
-kubectl logs -n stop-app deploy/backend -f
-kubectl logs -n stop-app statefulset/mongo
-kubectl describe pod -n stop-app mongo-0
-kubectl exec -it -n stop-app mongo-0 -- mongosh -u admin -p adminpass
-kubectl top pod -n stop-app                            # wymaga `minikube addons enable metrics-server`
-kubectl port-forward -n stop-app svc/backend-svc 3000:3000   # debug API bez Ingressa i tunnela
+kubectl get all,pvc,ingress -n pm-app
+kubectl logs -n pm-app deploy/backend -f
+kubectl logs -n pm-app statefulset/mongo
+kubectl describe pod -n pm-app mongo-0
+kubectl exec -it -n pm-app mongo-0 -- mongosh -u admin -p adminpass
+kubectl top pod -n pm-app                            # wymaga `minikube addons enable metrics-server`
+kubectl port-forward -n pm-app svc/backend-svc 3000:3000   # debug API bez Ingressa i tunnela
 ```
 
 ### Sprzątanie
@@ -168,12 +168,12 @@ Tabelka rzeczy, które mogą się chcieć zmienić.
 | Co                          | Gdzie                                                                                       | Domyślnie                                              |
 | --------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | Hasło i user Mongo          | [`k8s/10-mongo-secret.yaml`](k8s/10-mongo-secret.yaml) (base64)                             | `admin` / `adminpass`                                  |
-| Nazwa bazy, port, host Mongo| [`k8s/20-backend-configmap.yaml`](k8s/20-backend-configmap.yaml)                            | `stop`, `27017`, `mongo-0.mongo.stop-app.svc...`       |
+| Nazwa bazy, port, host Mongo| [`k8s/20-backend-configmap.yaml`](k8s/20-backend-configmap.yaml)                            | `pm`, `27017`, `mongo-0.mongo.pm-app.svc...`         |
 | Rozmiar wolumenu Mongo      | [`k8s/12-mongo-statefulset.yaml`](k8s/12-mongo-statefulset.yaml) (`volumeClaimTemplates`)   | 2Gi, `storageClassName: standard`                      |
 | Liczba replik frontendu     | [`k8s/30-frontend-deployment.yaml`](k8s/30-frontend-deployment.yaml)                        | 2 (stateless)                                          |
 | Liczba replik backendu      | [`k8s/21-backend-deployment.yaml`](k8s/21-backend-deployment.yaml)                          | 2 (auto-stop trzymany w MongoDB — skalowalne)          |
 | Requests / limits CPU + RAM | Wszystkie Deployment/StatefulSet                                                            | zob. manifesty (Lab 8)                                 |
-| Routing / host              | [`k8s/40-ingress.yaml`](k8s/40-ingress.yaml)                                                | `host: stop.local`, `/api` -> backend, `/` -> frontend  |
+| Routing / host              | [`k8s/40-ingress.yaml`](k8s/40-ingress.yaml)                                                | `host: pm.local`, `/api` -> backend, `/` -> frontend  |
 
 ## API
 
@@ -188,7 +188,7 @@ Najważniejsze endpointy:
 - `POST /api/rooms/:code/settings` - zmiana ustawień (host)
 - `POST /api/rooms/:code/start` / `/stop` / `/answers` / `/vote` / `/next-round` / `/reset` - przebieg gry
 
-Backend trzyma stan pokoi w kolekcji `rooms` w bazie `stop`, klucz dokumentu = `code` pokoju.
+Backend trzyma stan pokoi w kolekcji `rooms` w bazie `pm`, klucz dokumentu = `code` pokoju.
 
 ## Ograniczenia
 

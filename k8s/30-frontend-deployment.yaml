@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: frontend
-  namespace: stop-app
+  namespace: pm-app
   labels:
     app: frontend
 spec:
@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: stop-frontend:1.0
+          image: pm-frontend:1.0
           imagePullPolicy: Never
           ports:
             - containerPort: 80
