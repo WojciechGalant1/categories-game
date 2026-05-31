@@ -19,39 +19,41 @@ info:
     - **5 pts** — duplicate valid answer (same as another player)
     - **0 pts** — empty or rejected by votes
 
-    ## Persistence (MongoDB)
-    Room state is persisted in a MongoDB collection (`rooms` in database `pm`).
-    Each room is stored as a single document whose `_id` equals the room `code`.
-    Reads use `findOne({ _id: code })` and writes use `replaceOne({...}, room, { upsert: true })`,
-    so every state-changing endpoint performs one read and one write against Mongo.
+    ## Persistence (PostgreSQL + JPA)
+    The backend is a Spring Boot (Java 21) application using Spring Data JPA / Hibernate.
+    Room state is persisted in PostgreSQL: a `rooms` table (primary key `code`) and a
+    `players` table (foreign key `room_code`). Nested structures (`scores`, `settings.categories`,
+    `game.answers`, `game.votes`, `game.stoppedPlayers`) are stored as PostgreSQL `JSONB` columns.
 
-    Connection parameters come from environment variables (`MONGO_URI`, `MONGO_DB`),
-    injected from a `ConfigMap` (`backend-config`) and `Secret` (`mongo-credentials`) in Kubernetes.
-    The backend retries the initial connection every 2 s until Mongo is reachable.
+    Connection parameters come from environment variables
+    (`SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, `SPRING_DATASOURCE_PASSWORD`),
+    injected from a `ConfigMap` (`backend-config`) and a `Secret` (`postgres-credentials`) in Kubernetes.
+    The schema is created/updated automatically by Hibernate (`ddl-auto=update`).
 
     ## Scalable auto-stop
-    Round expiry is stored as `game.roundEndsAt` (Unix ms) in the room document — there are no
-    in-process timers. On every `GET /api/rooms/:code` poll the backend atomically executes:
+    Round expiry is stored as `game.roundEndsAt` (Unix ms) in the room row — there are no
+    in-process timers. On every `GET /api/rooms/{code}` poll the backend runs a single atomic
+    `UPDATE` (Spring Data `@Modifying` query):
 
-    ```
-    updateOne(
-      { _id: code, status: 'playing', 'game.roundEndsAt': { $lte: now } },
-      { $set: { status: 'reviewing' } }
-    )
+    ```sql
+    UPDATE rooms SET status = 'reviewing'
+    WHERE code = :code AND status = 'playing' AND round_ends_at <= :now
     ```
 
-    Because the filter includes `status: 'playing'`, MongoDB guarantees the write happens
+    Because the `WHERE` clause includes `status = 'playing'`, the row-level update is applied
     at most once even when multiple backend replicas poll concurrently. This allows the backend
     Deployment to scale to any number of replicas without split-brain timer issues.
+    `mainTimeLeft` is not persisted; it is recomputed on each read as
+    `max(0, (roundEndsAt - now) / 1000)`.
   version: 1.0.0
   contact:
     name: Państwa Miasta Dev Team
 
 servers:
-  - url: http://localhost:3000/api
-    description: Local development server (backend running directly with `node index.js`)
   - url: http://localhost:8080/api
-    description: Minikube cluster via `kubectl port-forward svc/ingress-nginx-controller 8080:80`
+    description: Local development server (Spring Boot running directly with `./mvnw spring-boot:run`)
+  - url: http://pm.local/api
+    description: Minikube cluster via Ingress (`minikube tunnel` + `pm.local` in hosts file)
   - url: /api
     description: Same-origin (frontend served behind the same Ingress)
 
@@ -103,8 +105,8 @@ paths:
       responses:
         '200':
           description: |
-            Room created successfully. A new document is inserted into the `rooms` collection
-            with `_id` equal to the generated `code` (`replaceOne(..., { upsert: true })`).
+            Room created successfully. A new row is inserted into the `rooms` table
+            with primary key `code` equal to the generated room code.
           content:
             application/json:
               schema:
@@ -133,12 +135,11 @@ paths:
         (seconds remaining in the round) computed directly from the persisted `game.roundEndsAt`
         field: `max(0, floor((roundEndsAt - now) / 1000))`.
 
-        Before loading the room, the endpoint atomically transitions it to `reviewing` if
-        `game.roundEndsAt ≤ now` (see the "Scalable auto-stop" section in the API description).
+        Before loading the room, the endpoint runs the atomic auto-stop `UPDATE` that transitions
+        it to `reviewing` if `round_ends_at <= now` (see the "Scalable auto-stop" section).
 
-        Implemented as `db.rooms.findOne({ _id: code })` after the optional auto-stop update.
-        The MongoDB document is returned as-is plus the computed `mainTimeLeft`, so the response
-        includes `_id` (always equal to `code`) alongside the regular fields.
+        Implemented as `roomRepository.findById(code)` after the optional auto-stop update.
+        The row is returned as the JSON room object plus the computed `mainTimeLeft`.
       parameters:
         - $ref: '#/components/parameters/RoomCode'
       responses:
@@ -162,7 +163,7 @@ paths:
         Join an existing room by its code. If a player with the same nick already exists
         in the room, the existing player ID is returned (reconnect behavior).
 
-        Performs one `findOne` and (on success) one `replaceOne` against the `rooms` collection.
+        Performs one read and (on success) one save against the `rooms` table.
       parameters:
         - $ref: '#/components/parameters/RoomCode'
       requestBody:
@@ -208,7 +209,7 @@ paths:
               $ref: '#/components/schemas/UpdateSettingsRequest'
       responses:
         '200':
-          description: Settings updated (room document overwritten in MongoDB)
+          description: Settings updated (room row updated in PostgreSQL)
           content:
             application/json:
               schema:
@@ -242,7 +243,7 @@ paths:
 
         On the first round, all player scores are reset to 0.
 
-        The room document in MongoDB is updated with the new `status`, `currentRound`,
+        The room row in PostgreSQL is updated with the new `status`, `currentRound`,
         `currentLetter`, `roundStartedAt`, `roundEndsAt` and cleared `answers`/`votes`/`stoppedPlayers`.
         `roundEndsAt` is set to `roundStartedAt + settings.timePerRound * 60 000` ms and is used
         by the polling endpoint for atomic auto-stop (no in-process timers).
@@ -430,8 +431,8 @@ paths:
           description: |
             Round ended; the next round is started or the game is marked `finished`.
             Updated `scores`, `currentRound`, `currentLetter`, `roundStartedAt`, `roundEndsAt`,
-            and cleared `answers`/`votes`/`stoppedPlayers` are persisted to MongoDB
-            in a single `replaceOne`. `roundEndsAt` is set to `null` when the game finishes.
+            and cleared `answers`/`votes`/`stoppedPlayers` are persisted to PostgreSQL.
+            `roundEndsAt` is set to `null` when the game finishes.
           content:
             application/json:
               schema:
@@ -473,8 +474,8 @@ paths:
         '200':
           description: |
             Room reset to lobby. All in-progress game fields are cleared and
-            scores are zeroed in the persisted document. The room itself is **not**
-            removed from MongoDB.
+            scores are zeroed in the persisted row. The room itself is **not**
+            removed from PostgreSQL.
           content:
             application/json:
               schema:
@@ -505,7 +506,7 @@ components:
   responses:
     InternalServerError:
       description: |
-        Unexpected backend error. In practice this is most often a MongoDB
+        Unexpected backend error. In practice this is most often a PostgreSQL
         connectivity or query failure (the backend logs the original error and
         returns a generic message to the client).
       content:
@@ -733,15 +734,6 @@ components:
             The polling endpoint uses this field for atomic server-side auto-stop —
             no in-process timers are involved, enabling horizontal backend scaling.
           example: 1715450060000
-        stopTriggeredAt:
-          type: integer
-          nullable: true
-          description: |
-            Unix timestamp (ms) when STOP was triggered.
-
-            This field is currently stored in the room document by the backend (often `null`),
-            but it is not actively used by the game flow logic.
-          example: 1715450005000
 
         answers:
           type: object
@@ -774,7 +766,7 @@ components:
           description: |
             Seconds remaining in the current round (only meaningful during `playing` status).
             Computed server-side as `max(0, floor((game.roundEndsAt - now) / 1000))` and
-            included in the response alongside the persisted document fields.
+            included in the response alongside the persisted fields.
           example: 45
 
     RoomState:
@@ -782,31 +774,20 @@ components:
       description: |
         Complete room state returned by the polling endpoint.
 
-        This document is stored 1:1 in MongoDB (collection `rooms`, database `pm`).
-        The `_id` field is MongoDB's primary key and is always equal to `code` — clients
-        can ignore `_id` and rely on `code` exclusively.
+        Persisted as a row in the `rooms` table (primary key `code`) in PostgreSQL;
+        nested structures are stored as `JSONB` columns.
       properties:
-        _id:
-          type: string
-          description: |
-            MongoDB document identifier. Always equal to `code` and present in
-            the response because the backend returns the stored document as-is.
-          example: "A1B2C3"
         code:
           type: string
-          description: Room code
+          description: Room code (primary key)
           example: "A1B2C3"
-        isPublic:
-          type: boolean
-          description: Whether the room is publicly listed
         status:
           type: string
-          enum: [lobby, playing, stopping, reviewing, finished]
+          enum: [lobby, playing, reviewing, finished]
           description: |
             Current phase of the room:
             - `lobby` — waiting for players, settings can be changed
             - `playing` — round in progress, players fill in answers
-            - `stopping` — legacy/compatibility state (not actively used by current backend logic)
             - `reviewing` — players vote on answers
             - `finished` — all rounds completed, final scores shown
           example: "playing"
