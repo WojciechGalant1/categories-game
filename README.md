@@ -6,14 +6,14 @@ Multiplayerowa gra słowna "Państwa Miasta" wdrożona na lokalnym klastrze Kube
 
 ```mermaid
 flowchart LR
-    user[Przegladarka] -->|http://localhost:8080| ingress[ingress-nginx]
+    user[Przegladarka] -->|http://pm.local| ingress[ingress-nginx]
     ingress -->|path /| feSvc[Service<br/>frontend-svc:80]
     ingress -->|path /api| beSvc[Service<br/>backend-svc:3000]
     feSvc --> feDep[Deployment frontend<br/>2 repliki<br/>nginx + Vite build]
-    beSvc --> beDep[Deployment backend<br/>Express + MongoDB driver]
-    beDep -->|"mongodb://...@mongo-0.mongo"| mongoHl[Headless Service<br/>mongo clusterIP:None]
-    mongoHl --> mongoSs[StatefulSet mongo-0<br/>image mongo:6]
-    mongoSs --> pvc[(PVC 2Gi<br/>storageClass standard)]
+    beSvc --> beDep[Deployment backend<br/>2 repliki<br/>Spring Boot + JPA]
+    beDep -->|"jdbc:postgresql://postgres-0.postgres"| pgHl[Headless Service<br/>postgres clusterIP:None]
+    pgHl --> pgSs[StatefulSet postgres-0<br/>image postgres:16]
+    pgSs --> pvc[(PVC 2Gi<br/>storageClass standard)]
 ```
 
 Wszystko żyje w namespace `pm-app`.
@@ -21,8 +21,8 @@ Wszystko żyje w namespace `pm-app`.
 | Komponent  | Technologia                           | Folder           | 
 | ---------- | ------------------------------------- | ---------------- | 
 | Frontend   | React 19 + Vite + Tailwind + nginx    | `frontend/`      | 
-| Backend    | Express 5 + driver `mongodb`          | `backendTest/`   | 
-| Baza       | MongoDB 6 (StatefulSet + PVC)         | -                | 
+| Backend    | Spring Boot 4 (Java 21) + Spring Data JPA | `backendJava/` | 
+| Baza       | PostgreSQL 16 (StatefulSet + PVC)     | -                | 
 | Ekspozycja | ingress-nginx, path-based             | `k8s/40-ingress` | 
 
 Frontend komunikuje się z backendem przez **relatywny** prefix `/api` (zob. [`frontend/src/services/api.ts`](frontend/src/services/api.ts)) — ten sam build chodzi za Ingressem niezależnie od hosta.
@@ -31,10 +31,10 @@ Frontend komunikuje się z backendem przez **relatywny** prefix `/api` (zob. [`f
 
 ```
 .
-├── backendTest/        # Express + Mongo
-│   ├── index.js
-│   ├── package.json
-│   ├── Dockerfile
+├── backendJava/        # Spring Boot (Java 21) + Spring Data JPA
+│   ├── src/main/java/  # kontroler, serwis, encje, repozytorium
+│   ├── pom.xml
+│   ├── Dockerfile      # multi-stage: maven build -> temurin JRE
 │   └── openapi.yaml    # specyfikacja API
 ├── frontend/           # React/Vite + nginx
 │   ├── src/
@@ -42,9 +42,9 @@ Frontend komunikuje się z backendem przez **relatywny** prefix `/api` (zob. [`f
 │   └── nginx.conf      # SPA fallback (try_files ... /index.html)
 ├── k8s/                # manifesty Kubernetes (Lab 2-5 + 8)
 │   ├── 00-namespace.yaml
-│   ├── 10-mongo-secret.yaml
-│   ├── 11-mongo-headless-service.yaml
-│   ├── 12-mongo-statefulset.yaml
+│   ├── 10-postgres-secret.yaml
+│   ├── 11-postgres-service.yaml
+│   ├── 12-postgres-statefulset.yaml
 │   ├── 20-backend-configmap.yaml
 │   ├── 21-backend-deployment.yaml
 │   ├── 22-backend-service.yaml
@@ -57,7 +57,7 @@ Frontend komunikuje się z backendem przez **relatywny** prefix `/api` (zob. [`f
 ## Wymagania
 
 - `minikube` >= 1.38, `kubectl`, Docker 
-- Lokalnie do dev: Node.js 18+, npm
+- Lokalnie do dev: JDK 21 + Maven (lub `./mvnw`), Node.js 18+ i npm dla frontendu
 
 ## Uruchomienie w minikube
 
@@ -74,7 +74,7 @@ Dzięki temu Kubernetes znajduje obrazy lokalnie i nie próbuje ich ściągać z
 
 ```bash
 eval $(minikube -p minikube docker-env --shell bash)
-docker build -t pm-backend:2.0 backendTest/
+docker build -t pm-backend:3.0 backendJava/
 docker build -t pm-frontend:1.0 frontend/
 ```
 
@@ -135,9 +135,8 @@ curl -X POST -H 'Content-Type: application/json' \
      -d '{"nick":"tester","isPublic":true}' \
      http://pm.local/api/rooms                     # backend -> {code, playerId}
 curl http://pm.local/api/rooms                     # zwraca utworzony pokoj
-kubectl exec -n pm-app mongo-0 -- mongosh -u admin -p adminpass \
-     --authenticationDatabase admin --quiet \
-     --eval 'db.getSiblingDB("pm").rooms.find({}).toArray()'  # dokument w bazie
+kubectl exec -n pm-app postgres-0 -- \
+     psql -U pm -d pm -c 'SELECT code, status FROM rooms;'   # wiersz w bazie
 ```
 
 Aplikacja w przeglądarce: <http://pm.local>
@@ -147,9 +146,9 @@ Aplikacja w przeglądarce: <http://pm.local>
 ```bash
 kubectl get all,pvc,ingress -n pm-app
 kubectl logs -n pm-app deploy/backend -f
-kubectl logs -n pm-app statefulset/mongo
-kubectl describe pod -n pm-app mongo-0
-kubectl exec -it -n pm-app mongo-0 -- mongosh -u admin -p adminpass
+kubectl logs -n pm-app statefulset/postgres
+kubectl describe pod -n pm-app postgres-0
+kubectl exec -it -n pm-app postgres-0 -- psql -U pm -d pm
 kubectl top pod -n pm-app                            # wymaga `minikube addons enable metrics-server`
 kubectl port-forward -n pm-app svc/backend-svc 3000:3000   # debug API bez Ingressa i tunnela
 ```
@@ -167,17 +166,17 @@ Tabelka rzeczy, które mogą się chcieć zmienić.
 
 | Co                          | Gdzie                                                                                       | Domyślnie                                              |
 | --------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| Hasło i user Mongo          | [`k8s/10-mongo-secret.yaml`](k8s/10-mongo-secret.yaml) (base64)                             | `admin` / `adminpass`                                  |
-| Nazwa bazy, port, host Mongo| [`k8s/20-backend-configmap.yaml`](k8s/20-backend-configmap.yaml)                            | `pm`, `27017`, `mongo-0.mongo.pm-app.svc...`         |
-| Rozmiar wolumenu Mongo      | [`k8s/12-mongo-statefulset.yaml`](k8s/12-mongo-statefulset.yaml) (`volumeClaimTemplates`)   | 2Gi, `storageClassName: standard`                      |
+| Hasło, user i baza Postgres | [`k8s/10-postgres-secret.yaml`](k8s/10-postgres-secret.yaml) (base64)                       | `pm` / `pmpass` / `pm`                                 |
+| Datasource URL (host, baza) | [`k8s/20-backend-configmap.yaml`](k8s/20-backend-configmap.yaml)                            | `jdbc:postgresql://postgres-0.postgres.pm-app.svc...:5432/pm` |
+| Rozmiar wolumenu Postgres   | [`k8s/12-postgres-statefulset.yaml`](k8s/12-postgres-statefulset.yaml) (`volumeClaimTemplates`) | 2Gi, `storageClassName: standard`                  |
 | Liczba replik frontendu     | [`k8s/30-frontend-deployment.yaml`](k8s/30-frontend-deployment.yaml)                        | 2 (stateless)                                          |
-| Liczba replik backendu      | [`k8s/21-backend-deployment.yaml`](k8s/21-backend-deployment.yaml)                          | 2 (auto-stop trzymany w MongoDB — skalowalne)          |
+| Liczba replik backendu      | [`k8s/21-backend-deployment.yaml`](k8s/21-backend-deployment.yaml)                          | 2 (auto-stop trzymany w PostgreSQL — skalowalne)       |
 | Requests / limits CPU + RAM | Wszystkie Deployment/StatefulSet                                                            | zob. manifesty (Lab 8)                                 |
 | Routing / host              | [`k8s/40-ingress.yaml`](k8s/40-ingress.yaml)                                                | `host: pm.local`, `/api` -> backend, `/` -> frontend  |
 
 ## API
 
-Specyfikacja OpenAPI: [`backendTest/openapi.yaml`](backendTest/openapi.yaml).
+Specyfikacja OpenAPI: [`backendJava/openapi.yaml`](backendJava/openapi.yaml).
 
 Najważniejsze endpointy:
 
@@ -188,21 +187,20 @@ Najważniejsze endpointy:
 - `POST /api/rooms/:code/settings` - zmiana ustawień (host)
 - `POST /api/rooms/:code/start` / `/stop` / `/answers` / `/vote` / `/next-round` / `/reset` - przebieg gry
 
-Backend trzyma stan pokoi w kolekcji `rooms` w bazie `pm`, klucz dokumentu = `code` pokoju.
+Backend trzyma stan pokoi w tabeli `rooms` (klucz główny = `code`) oraz `players` w bazie `pm`. Zagnieżdżone struktury (`scores`, `answers`, `votes`, `stoppedPlayers`, `categories`) są kolumnami `JSONB`. Schemat tworzy Hibernate (`ddl-auto=update`).
 
 ## Ograniczenia
 
-- **Reklady Mongo**: PVC `mongo-data-mongo-0` przeżywa restart Poda, ale `kubectl delete -f k8s/` usuwa też StatefulSet — PVC zostaje (`Retain` zachowanie standardowego StorageClassa w minikube) i zostanie ponownie zbindowany po re-applyu.
+- **Restart Postgresa**: PVC `postgres-data-postgres-0` przeżywa restart Poda, ale `kubectl delete -f k8s/` usuwa też StatefulSet — PVC zostaje (standardowy StorageClass w minikube) i zostanie ponownie zbindowany po re-applyu.
+- **Pierwszy start backendu** jest wolniejszy (start JVM + utworzenie schematu przez Hibernate), dlatego sondy mają podwyższone `initialDelaySeconds`.
 
 ## Architektura auto-stop
 
-Czas trwania rundy jest przechowywany jako `game.roundEndsAt` (Unix ms) w dokumencie MongoDB — **brak timerów w pamięci procesu**. Przy każdym pollu `GET /api/rooms/:code` backend wykonuje atomowe:
+Czas trwania rundy jest przechowywany jako `game.roundEndsAt` (Unix ms, kolumna `round_ends_at`) w wierszu pokoju — **brak timerów w pamięci procesu**. Przy każdym pollu `GET /api/rooms/{code}` backend wykonuje pojedynczy atomowy `UPDATE` (Spring Data `@Modifying`):
 
-```js
-updateOne(
-  { _id: code, status: 'playing', 'game.roundEndsAt': { $lte: now } },
-  { $set: { status: 'reviewing' } }
-)
+```sql
+UPDATE rooms SET status = 'reviewing'
+WHERE code = :code AND status = 'playing' AND round_ends_at <= :now
 ```
 
-MongoDB gwarantuje, że zapis wykona się co najwyżej raz, nawet gdy kilka replik backendu odpowiada równolegle. Dzięki temu Deployment backendu można swobodnie skalować (`replicas: 2` i więcej).
+PostgreSQL gwarantuje, że zapis wiersza wykona się co najwyżej raz, nawet gdy kilka replik backendu odpowiada równolegle. Dzięki temu Deployment backendu można swobodnie skalować (`replicas: 2` i więcej). `mainTimeLeft` nie jest persystowane — backend liczy je na każdym odczycie jako `max(0, (roundEndsAt - now) / 1000)`.
