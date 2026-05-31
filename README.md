@@ -1,7 +1,6 @@
 # Państwa Miasta
 
-Multiplayerowa gra słowna "Państwa Miasta" wdrożona na lokalnym klastrze Kubernetes z wykorzystaniem `minikube`. Projekt zbudowany według wzorców z Laboratoriów 2-5 oraz 8 (`lab/`).
-
+Multiplayerowa gra słowna "Państwa Miasta" wdrożona na lokalnym klastrze Kubernetes z wykorzystaniem `minikube`. 
 ## Architektura
 
 ```mermaid
