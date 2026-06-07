@@ -20,7 +20,7 @@ Wszystko żyje w namespace `pm-app`.
 | Komponent  | Technologia                           | Folder           | 
 | ---------- | ------------------------------------- | ---------------- | 
 | Frontend   | React 19 + Vite + Tailwind + nginx    | `frontend/`      | 
-| Backend    | Spring Boot 4 (Java 21) + Spring Data JPA | `backendJava/` | 
+| Backend    | Spring Boot 4 (Java 21) + Spring Data JPA | `backend/` | 
 | Baza       | PostgreSQL 16 (StatefulSet + PVC)     | -                | 
 | Ekspozycja | ingress-nginx, path-based             | `k8s/40-ingress` | 
 
@@ -30,7 +30,7 @@ Frontend komunikuje się z backendem przez **relatywny** prefix `/api` (zob. [`f
 
 ```
 .
-├── backendJava/        # Spring Boot (Java 21) + Spring Data JPA
+├── backend/        # Spring Boot (Java 21) + Spring Data JPA
 │   ├── src/main/java/  # kontroler, serwis, encje, repozytorium
 │   ├── pom.xml
 │   ├── Dockerfile      # multi-stage: maven build -> temurin JRE
@@ -73,7 +73,7 @@ Dzięki temu Kubernetes znajduje obrazy lokalnie i nie próbuje ich ściągać z
 
 ```bash
 eval $(minikube -p minikube docker-env --shell bash)
-docker build -t pm-backend:3.0 backendJava/
+docker build -t pm-backend:3.0 backend/
 docker build -t pm-frontend:1.0 frontend/
 ```
 
@@ -175,7 +175,7 @@ Tabelka rzeczy, które mogą się chcieć zmienić.
 
 ## API
 
-Specyfikacja OpenAPI: [`backendJava/openapi.yaml`](backendJava/openapi.yaml).
+Specyfikacja OpenAPI: [`backend/openapi.yaml`](backend/openapi.yaml).
 
 Najważniejsze endpointy:
 

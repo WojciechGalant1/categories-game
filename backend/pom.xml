@@ -9,10 +9,10 @@
         <relativePath/> <!-- lookup parent from repository -->
     </parent>
     <groupId>com.example</groupId>
-    <artifactId>PanstwaMiasta</artifactId>
+    <artifactId>backend</artifactId>
     <version>0.0.1-SNAPSHOT</version>
-    <name>PanstwaMiasta</name>
-    <description>PanstwaMiasta</description>
+    <name>backend</name>
+    <description>Państwa Miasta — Spring Boot backend</description>
     <url/>
     <licenses>
         <license/>
