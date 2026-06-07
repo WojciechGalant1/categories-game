@@ -99,24 +99,22 @@ kubectl patch svc ingress-nginx-controller \
 Po uruchomieniu tunnela (krok 6) serwis dostanie `EXTERNAL-IP = 127.0.0.1`. Dodaj wpis raz na stałe:
 
 ```bash
-# WSL2
 echo "127.0.0.1 pm.local" | sudo tee -a /etc/hosts
 
-# Windows (przeglądarka Windows) — edytuj jako Administrator:
+# Windows:
 # C:\Windows\System32\drivers\etc\hosts
 # 127.0.0.1 pm.local
 ```
 
 ### 6. Uruchomienie tunnela
 
-W **osobnym terminalu** (może wymagać sudo na WSL2):
+W osobnym terminalu:
 
 ```bash
 minikube tunnel
 ```
 
-Zostaw terminal otwarty, tunnel działa dopóki proces żyje.  
-Zweryfikuj, że serwis ma `EXTERNAL-IP`:
+Sprawdzenie, czy serwis ma `EXTERNAL-IP`:
 
 ```bash
 kubectl get svc -n ingress-nginx ingress-nginx-controller
@@ -160,9 +158,8 @@ minikube delete
 
 ## Konfiguracja
 
-Tabelka rzeczy, które mogą się chcieć zmienić.
 
-| Co                          | Gdzie                                                                                       | Domyślnie                                              |
+|                           | Gdzie                                                                                       | Domyślnie                                              |
 | --------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | Hasło, user i baza Postgres | [`k8s/10-postgres-secret.yaml`](k8s/10-postgres-secret.yaml) (base64)                       | `pm` / `pmpass` / `pm`                                 |
 | Datasource URL (host, baza) | [`k8s/20-backend-configmap.yaml`](k8s/20-backend-configmap.yaml)                            | `jdbc:postgresql://postgres-0.postgres.pm-app.svc...:5432/pm` |
@@ -189,16 +186,16 @@ Backend trzyma stan pokoi w tabeli `rooms` (klucz główny = `code`) oraz `playe
 
 ## Ograniczenia
 
-- **Restart Postgresa**: PVC `postgres-data-postgres-0` przeżywa restart Poda, ale `kubectl delete -f k8s/` usuwa też StatefulSet — PVC zostaje (standardowy StorageClass w minikube) i zostanie ponownie zbindowany po re-applyu.
+- **Restart Postgresa**: PVC `postgres-data-postgres-0` przeżywa restart Poda, ale `kubectl delete -f k8s/` usuwa też StatefulSet - PVC zostaje (standardowy StorageClass w minikube) i zostanie ponownie zbindowany po re-applyu.
 - **Pierwszy start backendu** jest wolniejszy (start JVM + utworzenie schematu przez Hibernate), dlatego sondy mają podwyższone `initialDelaySeconds`.
 
 ## Architektura auto-stop
 
-Czas trwania rundy jest przechowywany jako `game.roundEndsAt` (Unix ms, kolumna `round_ends_at`) w wierszu pokoju — **brak timerów w pamięci procesu**. Przy każdym pollu `GET /api/rooms/{code}` backend wykonuje pojedynczy atomowy `UPDATE` (Spring Data `@Modifying`):
+Czas trwania rundy jest przechowywany jako `game.roundEndsAt` (Unix ms, kolumna `round_ends_at`) w wierszu pokoju - brak timerów w pamięci procesu. Przy każdym pollu `GET /api/rooms/{code}` backend wykonuje pojedynczy atomowy `UPDATE` (Spring Data `@Modifying`):
 
 ```sql
 UPDATE rooms SET status = 'reviewing'
 WHERE code = :code AND status = 'playing' AND round_ends_at <= :now
 ```
 
-PostgreSQL gwarantuje, że zapis wiersza wykona się co najwyżej raz, nawet gdy kilka replik backendu odpowiada równolegle. Dzięki temu Deployment backendu można swobodnie skalować (`replicas: 2` i więcej). `mainTimeLeft` nie jest persystowane — backend liczy je na każdym odczycie jako `max(0, (roundEndsAt - now) / 1000)`.
+PostgreSQL gwarantuje, że zapis wiersza wykona się co najwyżej raz, nawet gdy kilka replik backendu odpowiada równolegle. Dzięki temu Deployment backendu można swobodnie skalować (`replicas: 2` i więcej). `mainTimeLeft` nie jest persystowane - backend liczy je na każdym odczycie jako `max(0, (roundEndsAt - now) / 1000)`.
