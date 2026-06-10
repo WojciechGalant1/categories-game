@@ -38,7 +38,7 @@ Frontend komunikuje się z backendem przez **relatywny** prefix `/api` (zob. [`f
 │   ├── src/
 │   ├── Dockerfile      # multi-stage: node build -> nginx serve
 │   └── nginx.conf      # SPA fallback (try_files ... /index.html)
-├── k8s/                # manifesty Kubernetes (Lab 2-5 + 8)
+├── k8s/                # manifesty Kubernetes (Lab 2-5 + 8 + 9)
 │   ├── 00-namespace.yaml
 │   ├── 10-postgres-secret.yaml
 │   ├── 11-postgres-service.yaml
@@ -48,7 +48,11 @@ Frontend komunikuje się z backendem przez **relatywny** prefix `/api` (zob. [`f
 │   ├── 22-backend-service.yaml
 │   ├── 30-frontend-deployment.yaml
 │   ├── 31-frontend-service.yaml
-│   └── 40-ingress.yaml
+│   ├── 40-ingress.yaml
+│   └── rbac/           # RBAC (Lab 9)
+│       ├── 50-serviceaccounts.yaml  # konta least-privilege podów (bez tokenu API)
+│       ├── 51-viewer.yaml           # Role pm-viewer (read-only) + RoleBinding
+│       └── 52-operator.yaml         # Role pm-operator (restart/scale) + RoleBinding
 └── chat_export.json      # plik kontekstu LLM 
 ```
 
@@ -86,8 +90,10 @@ docker build -t pm-frontend:1.0 frontend/
 
 ### 3. Apply manifestów
 
+`-R` zapewnia rekurencyjne wczytanie podkatalogu `k8s/rbac/` (Lab 9):
+
 ```bash
-kubectl apply -f k8s/
+kubectl apply -R -f k8s/
 kubectl wait --for=condition=Ready pod --all -n pm-app --timeout=180s
 kubectl get all,pvc,ingress -n pm-app
 ```
@@ -207,3 +213,27 @@ WHERE code = :code AND status = 'playing' AND round_ends_at <= :now
 ```
 
 PostgreSQL gwarantuje, że zapis wiersza wykona się co najwyżej raz, nawet gdy kilka replik backendu odpowiada równolegle. Dzięki temu Deployment backendu można swobodnie skalować (`replicas: 2` i więcej). `mainTimeLeft` nie jest persystowane - backend liczy je na każdym odczycie jako `max(0, (roundEndsAt - now) / 1000)`.
+
+## RBAC (Lab 9)
+
+Manifesty w [`k8s/rbac/`](k8s/rbac/) stosują zasadę najmniejszych uprawnień (least privilege) do `pm-app`:
+
+- **Konta serwisowe podów** ([`50-serviceaccounts.yaml`](k8s/rbac/50-serviceaccounts.yaml)): `pm-backend` i `pm-frontend` z `automountServiceAccountToken: false`. Aplikacja nie korzysta z API Kubernetes, więc pody nie dostają tokenu i nie mają żadnych uprawnień do klastra (deploymenty wskazują te konta przez `serviceAccountName`).
+- **Role dla ludzi** (namespaced `Role` + `RoleBinding`, podmiot `kind: User`):
+  - `pm-viewer` ([`51-viewer.yaml`](k8s/rbac/51-viewer.yaml)) - tylko `get`/`list`/`watch` na podach, logach, serwisach, deploymentach, ingressach itp. Świadomie bez dostępu do `secrets`.
+  - `pm-operator` ([`52-operator.yaml`](k8s/rbac/52-operator.yaml)) - jak viewer plus `patch`/`update` deploymentów (restart/skalowanie) i `delete` podów. Również bez dostępu do `secrets`.
+
+Role są namespaced (`Role`/`RoleBinding`), więc uprawnienia obowiązują wyłącznie w `pm-app`. Weryfikacja przez impersonację (`--as`) - minikube ma RBAC włączony domyślnie:
+
+```bash
+kubectl auth can-i list pods   --as=pm-viewer   -n pm-app    # yes
+kubectl auth can-i get secrets --as=pm-viewer   -n pm-app    # no
+kubectl auth can-i list pods   --as=pm-viewer   -n default   # no  (zakres namespace)
+kubectl auth can-i patch deployments --as=pm-operator -n pm-app  # yes
+kubectl auth can-i delete pods       --as=pm-operator -n pm-app  # yes
+kubectl auth can-i get secrets       --as=pm-operator -n pm-app  # no
+
+# brak tokenu API w podzie backendu (least privilege):
+kubectl exec -n pm-app deploy/backend -- ls /var/run/secrets/kubernetes.io/serviceaccount
+# -> No such file or directory
+```

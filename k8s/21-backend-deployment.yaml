@@ -15,6 +15,8 @@ spec:
       labels:
         app: backend
     spec:
+      serviceAccountName: pm-backend
+      automountServiceAccountToken: false
       containers:
         - name: backend
           image: pm-backend:3.0

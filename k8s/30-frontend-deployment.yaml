@@ -15,6 +15,8 @@ spec:
       labels:
         app: frontend
     spec:
+      serviceAccountName: pm-frontend
+      automountServiceAccountToken: false
       containers:
         - name: frontend
           image: pm-frontend:1.0
