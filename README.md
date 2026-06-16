@@ -38,7 +38,7 @@ Frontend komunikuje się z backendem przez **relatywny** prefix `/api` (zob. [`f
 │   ├── src/
 │   ├── Dockerfile      # multi-stage: node build -> nginx serve
 │   └── nginx.conf      # SPA fallback (try_files ... /index.html)
-├── k8s/                # manifesty Kubernetes (Lab 2-5 + 8)
+├── k8s/                # manifesty Kubernetes (Lab 2-5 + 8 + HPA)
 │   ├── 00-namespace.yaml
 │   ├── 10-postgres-secret.yaml
 │   ├── 11-postgres-service.yaml
@@ -48,7 +48,8 @@ Frontend komunikuje się z backendem przez **relatywny** prefix `/api` (zob. [`f
 │   ├── 22-backend-service.yaml
 │   ├── 30-frontend-deployment.yaml
 │   ├── 31-frontend-service.yaml
-│   └── 40-ingress.yaml
+│   ├── 40-ingress.yaml
+│   └── 60-hpa.yaml         # HorizontalPodAutoscaler backend (2–10 replik)
 └── chat_export.json      # plik kontekstu LLM 
 ```
 
@@ -72,6 +73,7 @@ Backend, manifesty Kubernetes oraz instrukcja wdrożenia w tym README zostały o
 ```bash
 minikube start --memory=4096 --cpus=2 --driver=docker
 minikube addons enable ingress
+minikube addons enable metrics-server   # wymagane dla HPA i kubectl top
 ```
 
 ### 2. Build obrazów w demonie minikube
@@ -173,7 +175,7 @@ minikube delete
 | Datasource URL (host, baza) | [`k8s/20-backend-configmap.yaml`](k8s/20-backend-configmap.yaml)                            | `jdbc:postgresql://postgres-0.postgres.pm-app.svc...:5432/pm` |
 | Rozmiar wolumenu Postgres   | [`k8s/12-postgres-statefulset.yaml`](k8s/12-postgres-statefulset.yaml) (`volumeClaimTemplates`) | 2Gi, `storageClassName: standard`                  |
 | Liczba replik frontendu     | [`k8s/30-frontend-deployment.yaml`](k8s/30-frontend-deployment.yaml)                        | 2 (stateless)                                          |
-| Liczba replik backendu      | [`k8s/21-backend-deployment.yaml`](k8s/21-backend-deployment.yaml)                          | 2 (auto-stop trzymany w PostgreSQL — skalowalne)       |
+| Liczba replik backendu      | [`k8s/21-backend-deployment.yaml`](k8s/21-backend-deployment.yaml) + [`k8s/60-hpa.yaml`](k8s/60-hpa.yaml) | min 2, max 10 (HPA: CPU 70%, RAM 80%) |
 | Requests / limits CPU + RAM | Wszystkie Deployment/StatefulSet                                                            | zob. manifesty (Lab 8)                                 |
 | Routing / host              | [`k8s/40-ingress.yaml`](k8s/40-ingress.yaml)                                                | `host: pm.local`, `/api` -> backend, `/` -> frontend  |
 
@@ -207,3 +209,25 @@ WHERE code = :code AND status = 'playing' AND round_ends_at <= :now
 ```
 
 PostgreSQL gwarantuje, że zapis wiersza wykona się co najwyżej raz, nawet gdy kilka replik backendu odpowiada równolegle. Dzięki temu Deployment backendu można swobodnie skalować (`replicas: 2` i więcej). `mainTimeLeft` nie jest persystowane - backend liczy je na każdym odczycie jako `max(0, (roundEndsAt - now) / 1000)`.
+
+## HPA (Horizontal Pod Autoscaler)
+
+Backend skaluje się automatycznie między **2 a 10 replik** na podstawie zużycia CPU (cel 70% `requests`) i pamięci (cel 80% `requests`). Manifest: [`k8s/60-hpa.yaml`](k8s/60-hpa.yaml).
+
+**Wymagania:** addon `metrics-server` (włączany w kroku 1 startu minikube). HPA korzysta z `resources.requests` z [`k8s/21-backend-deployment.yaml`](k8s/21-backend-deployment.yaml) — bez nich metryki zasobowe nie działają.
+
+Po `kubectl apply -f k8s/` HPA przejmuje liczbę replik backendu (pole `replicas: 2` w Deployment to tylko wartość początkowa).
+
+```bash
+kubectl get hpa -n pm-app
+kubectl describe hpa backend-hpa -n pm-app
+kubectl top pod -n pm-app -l app=backend
+
+# test obciążeniowy (skalowanie w górę)
+kubectl run loadgen --image=busybox:1.36 --restart=Never -n pm-app -- \
+  sh -c 'while true; do wget -q -O- http://backend-svc:3000/api/rooms; done'
+kubectl get hpa backend-hpa -n pm-app -w   # obserwuj wzrost REPLICAS
+kubectl delete pod loadgen -n pm-app       # po teście — HPA stopniowo wraca do min. 2
+```
+
+**Uwaga:** JVM (Spring Boot) często utrzymuje wysokie zużycie RAM względem `requests`, więc metryka pamięci może utrzymywać więcej replik niż CPU. HPA bierze **maksimum** z rekomendacji obu metryk.
