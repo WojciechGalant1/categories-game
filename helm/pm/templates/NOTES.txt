@@ -1,0 +1,26 @@
+1. Utwórz Secret poza chartem (jeśli jeszcze nie istnieje):
+
+  kubectl create secret generic {{ .Values.postgres.credentialsSecret }} \
+    --from-literal=POSTGRES_USER=pm \
+    --from-literal=POSTGRES_PASSWORD=pmpass \
+    --from-literal=POSTGRES_DB={{ .Values.postgres.credentials.database }} \
+    -n {{ include "pm.namespace" . }} --dry-run=client -o yaml | kubectl apply -f -
+
+2. Wpis w /etc/hosts (po minikube tunnel):
+
+  127.0.0.1 {{ .Values.ingress.host }}
+
+3. Uruchom minikube tunnel w osobnym terminalu:
+
+  minikube tunnel
+
+4. Weryfikacja:
+
+  curl http://{{ .Values.ingress.host }}/
+  curl http://{{ .Values.ingress.host }}/api/rooms
+  kubectl get hpa -n {{ include "pm.namespace" . }}
+
+5. Helm:
+
+  helm upgrade {{ .Release.Name }} {{ .Chart.Name }} -n {{ include "pm.namespace" . }} -f values-minikube.yaml
+  helm rollback {{ .Release.Name }} -n {{ include "pm.namespace" . }}

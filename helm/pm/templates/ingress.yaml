@@ -1,12 +1,13 @@
+{{- if .Values.ingress.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: pm-ingress
-  namespace: pm-app
+  namespace: {{ include "pm.namespace" . }}
 spec:
-  ingressClassName: nginx
+  ingressClassName: {{ .Values.ingress.className }}
   rules:
-    - host: pm.local
+    - host: {{ .Values.ingress.host }}
       http:
         paths:
           - path: /api
@@ -15,11 +16,12 @@ spec:
               service:
                 name: backend-svc
                 port:
-                  number: 3000
+                  number: {{ .Values.backend.service.port }}
           - path: /
             pathType: Prefix
             backend:
               service:
                 name: frontend-svc
                 port:
-                  number: 80
+                  number: {{ .Values.frontend.service.port }}
+{{- end }}

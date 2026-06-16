@@ -2,11 +2,11 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: backend
-  namespace: pm-app
+  namespace: {{ include "pm.namespace" . }}
   labels:
     app: backend
 spec:
-  replicas: 2
+  replicas: {{ .Values.backend.replicas }}
   selector:
     matchLabels:
       app: backend
@@ -17,10 +17,10 @@ spec:
     spec:
       containers:
         - name: backend
-          image: pm-backend:3.0
-          imagePullPolicy: Never
+          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
-            - containerPort: 3000
+            - containerPort: {{ .Values.backend.serverPort }}
               name: http
           envFrom:
             - configMapRef:
@@ -29,17 +29,17 @@ spec:
             - name: SPRING_DATASOURCE_USERNAME
               valueFrom:
                 secretKeyRef:
-                  name: postgres-credentials
+                  name: {{ .Values.postgres.credentialsSecret }}
                   key: POSTGRES_USER
             - name: SPRING_DATASOURCE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: postgres-credentials
+                  name: {{ .Values.postgres.credentialsSecret }}
                   key: POSTGRES_PASSWORD
           readinessProbe:
             httpGet:
               path: /api/rooms
-              port: 3000
+              port: {{ .Values.backend.serverPort }}
             initialDelaySeconds: 25
             periodSeconds: 5
             timeoutSeconds: 3
@@ -47,15 +47,10 @@ spec:
           livenessProbe:
             httpGet:
               path: /api/rooms
-              port: 3000
+              port: {{ .Values.backend.serverPort }}
             initialDelaySeconds: 60
             periodSeconds: 15
             timeoutSeconds: 3
             failureThreshold: 3
           resources:
-            requests:
-              cpu: "250m"
-              memory: "256Mi"
-            limits:
-              cpu: "1"
-              memory: "512Mi"
+            {{- toYaml .Values.backend.resources | nindent 12 }}

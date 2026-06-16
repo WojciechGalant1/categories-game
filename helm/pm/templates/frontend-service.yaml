@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: frontend-svc
-  namespace: pm-app
+  namespace: {{ include "pm.namespace" . }}
   labels:
     app: frontend
 spec:
@@ -11,5 +11,5 @@ spec:
     app: frontend
   ports:
     - name: http
-      port: 80
+      port: {{ .Values.frontend.service.port }}
       targetPort: 80

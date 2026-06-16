@@ -1,0 +1,8 @@
+{{- if .Values.namespace.create }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "pm.namespace" . }}
+  labels:
+    name: {{ include "pm.namespace" . }}
+{{- end }}

@@ -2,9 +2,9 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: postgres
-  namespace: pm-app
+  namespace: {{ include "pm.namespace" . }}
 spec:
-  serviceName: "postgres"
+  serviceName: postgres
   replicas: 1
   selector:
     matchLabels:
@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: postgres:16
+          image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
           ports:
             - containerPort: 5432
               name: postgres
@@ -24,19 +24,18 @@ spec:
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
-                  name: postgres-credentials
+                  name: {{ .Values.postgres.credentialsSecret }}
                   key: POSTGRES_USER
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: postgres-credentials
+                  name: {{ .Values.postgres.credentialsSecret }}
                   key: POSTGRES_PASSWORD
             - name: POSTGRES_DB
               valueFrom:
                 secretKeyRef:
-                  name: postgres-credentials
+                  name: {{ .Values.postgres.credentialsSecret }}
                   key: POSTGRES_DB
-            # PGDATA in a subdirectory so the PVC mount root (with lost+found) is not used directly
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
           volumeMounts:
@@ -50,18 +49,13 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 6
           resources:
-            requests:
-              cpu: "200m"
-              memory: "256Mi"
-            limits:
-              cpu: "1"
-              memory: "1Gi"
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
   volumeClaimTemplates:
     - metadata:
         name: postgres-data
       spec:
         accessModes: ["ReadWriteOnce"]
-        storageClassName: standard
+        storageClassName: {{ .Values.postgres.storageClassName }}
         resources:
           requests:
-            storage: 2Gi
+            storage: {{ .Values.postgres.storage }}

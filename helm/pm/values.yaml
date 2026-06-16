@@ -1,0 +1,70 @@
+namespace:
+  name: pm-app
+  create: true
+
+global:
+  imagePullPolicy: IfNotPresent
+
+postgres:
+  image:
+    repository: postgres
+    tag: "16"
+  storage: 2Gi
+  storageClassName: standard
+  credentialsSecret: postgres-credentials
+  credentials:
+    create: false
+    database: pm
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
+backend:
+  image:
+    repository: pm-backend
+    tag: "3.0"
+  replicas: 2
+  serverPort: 3000
+  service:
+    port: 3000
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
+frontend:
+  image:
+    repository: pm-frontend
+    tag: "1.0"
+  replicas: 2
+  service:
+    port: 80
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "128Mi"
+
+ingress:
+  enabled: true
+  className: nginx
+  host: pm.local
+
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  cpu:
+    enabled: true
+    averageUtilization: 70
+  memory:
+    enabled: false

@@ -1,0 +1,8 @@
+namespace:
+  create: false
+
+global:
+  imagePullPolicy: Never
+
+ingress:
+  host: pm.local
