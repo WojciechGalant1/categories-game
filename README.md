@@ -48,14 +48,6 @@ Frontend komunikuje się z backendem przez **relatywny** prefix `/api` (zob. [`f
 └── chat_export.json
 ```
 
-## Wykorzystanie LLM
-
-Szkielet frontendu został stworzony ręcznie. LLM wykorzystano do poprawy wyglądu, dodania stylów (Tailwind) i dopracowania pełnego interfejsu, m.in. nagłówków rundy, formularzy odpowiedzi, panelu głosowania i ekranu wyników.
-
-LLM wygenerowało specyfikację REST API: listę endpointów, schematy request/response, opisy przepływu gry i punktacji.
-
-Backend, manifesty Kubernetes (obecnie Helm chart) oraz instrukcja wdrożenia w tym README zostały opracowane ręcznie, z okazjonalnym wsparciem LLM przy refaktoryzacji i dokumentacji.
-
 ## Wymagania
 
 - `minikube` >= 1.38, `kubectl`, `helm` >= 3.x, Docker
