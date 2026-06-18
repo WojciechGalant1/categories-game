@@ -25,8 +25,11 @@
   helm upgrade {{ .Release.Name }} {{ .Chart.Name }} -n {{ include "pm.namespace" . }} -f values-minikube.yaml
   helm rollback {{ .Release.Name }} -n {{ include "pm.namespace" . }}
 
-6. Redis (WebSocket broadcast):
+6. Redis (WebSocket broadcast + TTL pokoi):
 
   Redis Pub/Sub synchronizuje push stanu pokoju miedzy replikami backendu (HPA).
+  notify-keyspace-events Ex — usuwanie pokoju z Postgres po wygasnieciu room:deletion:*.
+  Lazy expiration: event expired moze przyjsc z opoznieniem (sekundy/minuty bez ruchu).
   Restart poda redis zrywa subskrypcje — klienci WebSocket reconnectuja automatycznie.
+  Jawne Opuść pokój (ostatni gracz) kasuje pokoj od razu; TTL dotyczy zamkniecia karty / F5.
   W prod: Redis Sentinel / managed Redis zamiast pojedynczej repliki.

@@ -255,7 +255,7 @@ Najważniejsze endpointy:
 - `POST /api/rooms/:code/join` - dołączenie do pokoju
 - `GET /api/rooms/:code` - pełny stan pokoju (REST fallback; główny sync przez WebSocket)
 - `WS /api/ws/rooms/:code` - push stanu pokoju (subscribe + ping/pong)
-- `POST /api/rooms/:code/settings` / `/start` / `/stop` / `/answers` / `/vote` / `/next-round` / `/reset`
+- `POST /api/rooms/:code/settings` / `/start` / `/stop` / `/answers` / `/vote` / `/next-round` / `/reset` / `/leave`
 
 ## Ograniczenia
 
@@ -275,6 +275,14 @@ WHERE code = :code AND status = 'playing' AND round_ends_at <= :now
 Dzięki temu backend można skalować (HPA 2–10 replik). Po każdej mutacji REST backend publikuje kod pokoju do **Redis Pub/Sub** (`room:updates`); każda replika pushuje świeży stan do swoich klientów WS. `mainTimeLeft` liczone dynamicznie przy pushu; frontend odlicza lokalnie między pushami.
 
 **Redis** — 1 replika wystarczy na lab; restart Redisa zrywa subskrypcje Pub/Sub (klienci WS reconnectują). W prod rozważ Redis Sentinel / ElastiCache.
+
+### Cleanup pokoi (TTL) i wyjście
+
+- **`POST /api/rooms/{code}/leave`** — gracz opuszcza pokój w dowolnej fazie; ostatni gracz kasuje pokój od razu.
+- Gdy **nikt nie ma aktywnego WebSocket** w pokoju, Redis ustawia TTL: **3 min** (lobby/finished) lub **10 min** (playing/reviewing) — czas na reconnect po zamknięciu karty / F5.
+- Ponowne **subscribe WS** anuluje TTL; po wygaśnięciu klucza pokój jest usuwany z Postgres.
+- Konfiguracja: `APP_ROOM_TTL_LOBBY_SECONDS`, `APP_ROOM_TTL_IN_GAME_SECONDS` w ConfigMap (domyślnie 180 / 600).
+- Redis wymaga `--notify-keyspace-events Ex` (w chart Helm). Event `expired` może przyjść z lekkim opóźnieniem (lazy expiration).
 
 Po zmianach backendu wymagany rebuild obrazu:
 

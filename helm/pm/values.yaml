@@ -38,6 +38,9 @@ backend:
     limits:
       cpu: "1"
       memory: "1Gi"
+  roomTtl:
+    lobbySeconds: 180
+    inGameSeconds: 600
 
 frontend:
   image:

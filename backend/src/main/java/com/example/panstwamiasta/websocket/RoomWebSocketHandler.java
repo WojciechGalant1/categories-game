@@ -3,7 +3,9 @@ package com.example.panstwamiasta.websocket;
 import com.example.panstwamiasta.model.Player;
 import com.example.panstwamiasta.room.Room;
 import com.example.panstwamiasta.service.RoomBroadcastService;
+import com.example.panstwamiasta.service.RoomConnectionCounterService;
 import com.example.panstwamiasta.service.RoomService;
+import com.example.panstwamiasta.service.RoomTtlService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -30,11 +32,27 @@ public class RoomWebSocketHandler extends TextWebSocketHandler {
     private RoomSessionRegistry sessionRegistry;
 
     @Autowired
+    private RoomTtlService roomTtlService;
+
+    @Autowired
+    private RoomConnectionCounterService connectionCounter;
+
+    @Autowired
     private ObjectMapper objectMapper;
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
+        Boolean subscribed = (Boolean) session.getAttributes().get("subscribed");
+        String roomCode = (String) session.getAttributes().get("roomCode");
         sessionRegistry.unregister(session);
+
+        if (Boolean.TRUE.equals(subscribed) && roomCode != null) {
+            Room room = roomService.getRoom(roomCode);
+            if (room != null) {
+                int ttlSeconds = roomTtlService.ttlSecondsForStatus(room.getStatus());
+                connectionCounter.decrementAndMaybeSchedule(roomCode, ttlSeconds);
+            }
+        }
     }
 
     @Override
@@ -94,6 +112,8 @@ public class RoomWebSocketHandler extends TextWebSocketHandler {
             session.getAttributes().put("subscribed", true);
             session.getAttributes().put("roomCode", roomCode);
             sessionRegistry.register(roomCode, session);
+            roomTtlService.cancelDeletion(roomCode);
+            connectionCounter.increment(roomCode);
             broadcastService.sendRoomState(session, room);
         }
     }

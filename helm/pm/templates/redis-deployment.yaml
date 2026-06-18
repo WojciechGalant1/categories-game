@@ -19,6 +19,7 @@ spec:
       containers:
         - name: redis
           image: {{ .Values.redis.image }}
+          command: ["redis-server", "--notify-keyspace-events", "Ex"]
           ports:
             - containerPort: {{ .Values.redis.port }}
               name: redis

@@ -81,6 +81,15 @@ export const api = {
             body: JSON.stringify({ playerId })
         });
         return res.json();
+    },
+    leaveRoom: async (code: string, playerId: string) => {
+        const res = await fetch(`${API_URL}/rooms/${code}/leave`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ playerId })
+        });
+        if (!res.ok) throw new Error('Leave failed');
+        return res.json();
     }
 };
 
@@ -90,6 +99,9 @@ export const setPlayerId = (code: string, playerId: string) => {
 };
 export const getPlayerId = (code: string) => {
     return localStorage.getItem(`playerId_${code}`);
+};
+export const clearPlayerId = (code: string) => {
+    localStorage.removeItem(`playerId_${code}`);
 };
 export const setNick = (nick: string) => {
     localStorage.setItem(`userNick`, nick);

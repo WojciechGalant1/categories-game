@@ -148,6 +148,21 @@ public class RoomController {
         }
     }
 
+    @PostMapping("/rooms/{code}/leave")
+    public ResponseEntity<?> leaveRoom(@PathVariable String code, @RequestBody PlayerIdRequest request) {
+        try {
+            roomService.leaveRoom(code, request);
+            return ResponseEntity.ok(new SuccessResponse(true));
+        } catch (RuntimeException e) {
+            if (e.getMessage().equals("Room not found")) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ApiError(e.getMessage()));
+            } else if (e.getMessage().equals("Player not in room")) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(new ApiError(e.getMessage()));
+            }
+            return ResponseEntity.badRequest().body(new ApiError(e.getMessage()));
+        }
+    }
+
     @PostMapping("/rooms/{code}/reset")
     public ResponseEntity<?> resetToLobby(@PathVariable String code, @RequestBody PlayerIdRequest request) {
         try {

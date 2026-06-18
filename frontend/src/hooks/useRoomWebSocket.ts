@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { api } from "../services/api";
+import { api, clearPlayerId } from "../services/api";
 
 const PING_INTERVAL_MS = 30000;
 const MAX_RECONNECT_DELAY_MS = 30000;
@@ -153,17 +153,17 @@ export const useRoomWebSocket = (roomCode: string, playerId: string | null) => {
     useEffect(() => {
         if (room?.status === "playing" && room?.game?.mainTimeLeft !== undefined) {
             setDisplayTimeLeft(room.game.mainTimeLeft);
-        } else {
+        } else if (room?.status !== "playing") {
             setDisplayTimeLeft(undefined);
         }
     }, [room?.game?.mainTimeLeft, room?.status, room?.game?.currentRound]);
 
     useEffect(() => {
-        if (room?.status !== "playing" || displayTimeLeft === undefined) {
+        if (room?.status !== "playing") {
             return;
         }
         const id = window.setInterval(() => {
-            setDisplayTimeLeft((t) => (t !== undefined && t > 0 ? t - 1 : 0));
+            setDisplayTimeLeft((t) => (t !== undefined && t > 0 ? t - 1 : t ?? 0));
         }, 1000);
         return () => clearInterval(id);
     }, [room?.status, room?.game?.currentRound]);
@@ -248,6 +248,21 @@ export const useRoomWebSocket = (roomCode: string, playerId: string | null) => {
         }
     };
 
+    const handleLeaveRoom = async () => {
+        mountedRef.current = false;
+        try {
+            await api.leaveRoom(roomCode, playerId!);
+        } catch {
+            // Room may already be gone — still leave locally
+        }
+        if (wsRef.current) {
+            wsRef.current.close();
+            wsRef.current = null;
+        }
+        clearPlayerId(roomCode);
+        navigate("/");
+    };
+
     return {
         room,
         isHost,
@@ -263,5 +278,6 @@ export const useRoomWebSocket = (roomCode: string, playerId: string | null) => {
         handleNextRound,
         handleVote,
         handleReset,
+        handleLeaveRoom,
     };
 };

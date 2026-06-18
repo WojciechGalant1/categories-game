@@ -42,6 +42,12 @@ info:
 
     `GET /api/rooms/{code}` is kept as a **fallback** (reconnect, debug, K8s probes).
 
+    ## Room cleanup (Redis TTL)
+    When the cluster-wide WebSocket counter (`room:ws:count:{code}`) drops to 0, Redis sets
+    `room:deletion:{code}` with EXPIRE — **3 min** in lobby/finished, **10 min** in playing/reviewing
+    (reconnect window). Re-subscribe cancels TTL (`DEL room:deletion:{code}`). On key expiry,
+    Postgres row is deleted. Explicit **POST /leave** by the last player deletes immediately (no TTL).
+
     ## Scalable auto-stop
     Round expiry is stored as `game.roundEndsAt` (Unix ms) in the room row. A scheduler runs every 1s
     but only for room codes with **active WebSocket subscribers** on that pod (`RoomSessionRegistry`).
@@ -482,6 +488,42 @@ paths:
                 $ref: '#/components/schemas/Error'
         '403':
           description: Only host can end the round
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /rooms/{code}/leave:
+    post:
+      tags: [Rooms]
+      operationId: leaveRoom
+      summary: Leave room
+      description: |
+        Removes the player from the room in any phase (lobby, playing, reviewing, finished).
+        Host role transfers to the next player if others remain. If the leaving player is the
+        last member, the room is deleted immediately from PostgreSQL and Redis keys are cleaned up.
+        Otherwise remaining clients receive a WebSocket push with updated state.
+      parameters:
+        - $ref: '#/components/parameters/RoomCode'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlayerIdRequest'
+      responses:
+        '200':
+          description: Player left successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '403':
+          description: Player not in room
           content:
             application/json:
               schema:

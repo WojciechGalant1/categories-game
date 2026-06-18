@@ -25,6 +25,9 @@ public class RoomService {
     @Lazy
     private RoomBroadcastService roomBroadcastService;
 
+    @Autowired
+    private RoomTtlService roomTtlService;
+
     private final Random random = new Random();
 
     private Room saveAndNotify(Room room) {
@@ -445,6 +448,45 @@ public class RoomService {
         room.getGame().getAnswers().clear();
         room.getGame().getVotes().clear();
         room.getGame().getStoppedPlayers().clear();
+        saveAndNotify(room);
+    }
+
+    // Leave room (any phase)
+    @Transactional
+    public void leaveRoom(String code, PlayerIdRequest request) {
+        Room room = roomRepository.findById(code).orElse(null);
+        if (room == null) {
+            throw new RuntimeException("Room not found");
+        }
+
+        UUID playerId = request.getPlayerId();
+        Player leaving = room.getPlayers().stream()
+                .filter(p -> p.getId().equals(playerId))
+                .findFirst()
+                .orElse(null);
+        if (leaving == null) {
+            throw new RuntimeException("Player not in room");
+        }
+
+        boolean wasHost = leaving.isHost();
+        room.getPlayers().remove(leaving);
+
+        String playerIdStr = playerId.toString();
+        room.getScores().remove(playerIdStr);
+        room.getGame().getAnswers().remove(playerIdStr);
+        room.getGame().getVotes().remove(playerIdStr);
+        room.getGame().getStoppedPlayers().remove(playerIdStr);
+
+        if (room.getPlayers().isEmpty()) {
+            roomRepository.deleteById(code);
+            roomTtlService.cleanup(code);
+            return;
+        }
+
+        if (wasHost) {
+            room.getPlayers().get(0).setIsHost(true);
+        }
+
         saveAndNotify(room);
     }
 }

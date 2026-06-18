@@ -9,4 +9,6 @@ data:
   {{- if .Values.redis.enabled }}
   SPRING_DATA_REDIS_HOST: {{ .Values.redis.host | quote }}
   SPRING_DATA_REDIS_PORT: {{ .Values.redis.port | quote }}
+  APP_ROOM_TTL_LOBBY_SECONDS: {{ .Values.backend.roomTtl.lobbySeconds | quote }}
+  APP_ROOM_TTL_IN_GAME_SECONDS: {{ .Values.backend.roomTtl.inGameSeconds | quote }}
   {{- end }}

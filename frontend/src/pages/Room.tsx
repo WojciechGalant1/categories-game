@@ -3,6 +3,7 @@ import { getPlayerId } from "../services/api";
 import { useRoomWebSocket } from "../hooks/useRoomWebSocket";
 import { PlayerList } from "../components/room/PlayerList";
 import { RoomSettings } from "../components/room/RoomSettings";
+import { LeaveRoomButton } from "../components/room/LeaveRoomButton";
 
 const Room = () => {
     const [searchParams] = useSearchParams();
@@ -16,6 +17,7 @@ const Room = () => {
         updateTime,
         updateRounds,
         handleStartGame,
+        handleLeaveRoom,
     } = useRoomWebSocket(roomCode, playerId);
 
     if (!room) return <div className="pt-32 text-center text-white">Ładowanie poczekalni...</div>;
@@ -31,6 +33,9 @@ const Room = () => {
                     Kod pokoju: <span className="text-transparent bg-clip-text bg-gradient-to-r from-brand-accent to-emerald-300 tracking-widest font-display ml-2">{roomCode}</span>
                 </h1>
                 <p className="text-gray-400">Wyślij ten kod znajomym, aby mogli dołączyć do gry</p>
+                <div className="mt-4 flex justify-center">
+                    <LeaveRoomButton onLeave={handleLeaveRoom} />
+                </div>
             </div>
 
             <div className="w-full max-w-5xl grid lg:grid-cols-12 gap-8 relative z-10">
