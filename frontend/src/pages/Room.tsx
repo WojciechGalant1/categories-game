@@ -1,6 +1,6 @@
 import { useSearchParams } from "react-router-dom";
 import { getPlayerId } from "../services/api";
-import { useRoomPolling } from "../hooks/useRoomPolling";
+import { useRoomWebSocket } from "../hooks/useRoomWebSocket";
 import { PlayerList } from "../components/room/PlayerList";
 import { RoomSettings } from "../components/room/RoomSettings";
 
@@ -16,7 +16,7 @@ const Room = () => {
         updateTime,
         updateRounds,
         handleStartGame,
-    } = useRoomPolling(roomCode, playerId);
+    } = useRoomWebSocket(roomCode, playerId);
 
     if (!room) return <div className="pt-32 text-center text-white">Ładowanie poczekalni...</div>;
 

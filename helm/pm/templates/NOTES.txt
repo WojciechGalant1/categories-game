@@ -24,3 +24,9 @@
 
   helm upgrade {{ .Release.Name }} {{ .Chart.Name }} -n {{ include "pm.namespace" . }} -f values-minikube.yaml
   helm rollback {{ .Release.Name }} -n {{ include "pm.namespace" . }}
+
+6. Redis (WebSocket broadcast):
+
+  Redis Pub/Sub synchronizuje push stanu pokoju miedzy replikami backendu (HPA).
+  Restart poda redis zrywa subskrypcje — klienci WebSocket reconnectuja automatycznie.
+  W prod: Redis Sentinel / managed Redis zamiast pojedynczej repliki.

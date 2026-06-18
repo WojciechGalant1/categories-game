@@ -4,6 +4,9 @@ kind: Ingress
 metadata:
   name: pm-ingress
   namespace: {{ include "pm.namespace" . }}
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
 spec:
   ingressClassName: {{ .Values.ingress.className }}
   rules:

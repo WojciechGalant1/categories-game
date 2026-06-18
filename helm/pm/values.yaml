@@ -59,6 +59,12 @@ ingress:
   className: nginx
   host: pm.local
 
+redis:
+  enabled: true
+  image: redis:7-alpine
+  host: redis
+  port: 6379
+
 hpa:
   enabled: true
   minReplicas: 2

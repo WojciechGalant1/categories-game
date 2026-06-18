@@ -7,7 +7,10 @@ import com.example.panstwamiasta.model.RoomSettings;
 import com.example.panstwamiasta.room.Room;
 import com.example.panstwamiasta.repository.RoomRepository;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import jakarta.transaction.Transactional;
 
 import java.util.*;
@@ -18,7 +21,27 @@ public class RoomService {
     @Autowired
     private RoomRepository roomRepository;
 
+    @Autowired
+    @Lazy
+    private RoomBroadcastService roomBroadcastService;
+
     private final Random random = new Random();
+
+    private Room saveAndNotify(Room room) {
+        Room saved = roomRepository.save(room);
+        String code = saved.getCode();
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    roomBroadcastService.publishRoomUpdate(code);
+                }
+            });
+        } else {
+            roomBroadcastService.publishRoomUpdate(code);
+        }
+        return saved;
+    }
 
     // Generate a random 6-character alphanumeric code
     private String generateRoomCode() {
@@ -59,7 +82,7 @@ public class RoomService {
         );
 
         host.setRoomCode(code);
-        room = roomRepository.save(room);
+        room = saveAndNotify(room);
 
         return new JoinResponse(code, playerId);
     }
@@ -102,6 +125,7 @@ public class RoomService {
         }
         room.getGame().setMainTimeLeft(mainTimeLeft);
         room.getGame().setTimeLeft(0);
+        room.getPlayers().size();
         return room;
     }
 
@@ -132,7 +156,7 @@ public class RoomService {
         Player newPlayer = new Player(playerId, request.getNick(), false);
         newPlayer.setRoomCode(code);
         room.getPlayers().add(newPlayer);
-        roomRepository.save(room);
+        saveAndNotify(room);
 
         return new JoinResponse(code, playerId);
     }
@@ -167,7 +191,7 @@ public class RoomService {
         if (newSettings.getMaxPlayers() != null) {
             room.getSettings().setMaxPlayers(newSettings.getMaxPlayers());
         }
-        roomRepository.save(room);
+        saveAndNotify(room);
     }
 
     // Start game
@@ -208,7 +232,7 @@ public class RoomService {
         room.getGame().getStoppedPlayers().clear();
 
         room.setStatus(Room.RoomStatus.playing);
-        roomRepository.save(room);
+        saveAndNotify(room);
     }
 
     // Trigger stop
@@ -237,7 +261,7 @@ public class RoomService {
         if (room.getGame().getStoppedPlayers().size() == room.getPlayers().size()) {
             room.setStatus(Room.RoomStatus.reviewing);
         }
-        roomRepository.save(room);
+        saveAndNotify(room);
     }
 
     // Submit answers
@@ -256,7 +280,7 @@ public class RoomService {
         }
 
         room.getGame().getAnswers().put(request.getPlayerId().toString(), request.getAnswers());
-        roomRepository.save(room);
+        saveAndNotify(room);
     }
 
     // Submit vote
@@ -284,7 +308,7 @@ public class RoomService {
             .computeIfAbsent(targetId, k -> new HashMap<>())
             .computeIfAbsent(category, k -> new HashMap<>())
             .put(voterId, request.isValid());
-        roomRepository.save(room);
+        saveAndNotify(room);
     }
 
     // Next round
@@ -310,10 +334,10 @@ public class RoomService {
         if (room.getGame().getCurrentRound() >= room.getSettings().getRounds()) {
             room.setStatus(Room.RoomStatus.finished);
             room.getGame().setRoundEndsAt(null);
-            roomRepository.save(room);
+            saveAndNotify(room);
         } else {
             // Start next round
-            roomRepository.save(room);
+            saveAndNotify(room);
             startGame(code, request);
         }
     }
@@ -421,6 +445,6 @@ public class RoomService {
         room.getGame().getAnswers().clear();
         room.getGame().getVotes().clear();
         room.getGame().getStoppedPlayers().clear();
-        roomRepository.save(room);
+        saveAndNotify(room);
     }
 }

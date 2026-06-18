@@ -1,6 +1,6 @@
 import { useSearchParams } from "react-router-dom";
 import { getPlayerId } from "../services/api";
-import { useGamePolling } from "../hooks/useGamePolling";
+import { useRoomWebSocket } from "../hooks/useRoomWebSocket";
 import { GameHeader } from "../components/game/GameHeader";
 import { AnswerForm } from "../components/game/AnswerForm";
 import { ReviewPanel } from "../components/game/ReviewPanel";
@@ -14,12 +14,13 @@ const Game = () => {
     const {
         room,
         answers,
+        displayTimeLeft,
         handleAnswerChange,
         handleStopClick,
         handleNextRound,
         handleVote,
         handleReset,
-    } = useGamePolling(roomCode, playerId);
+    } = useRoomWebSocket(roomCode, playerId);
 
     if (!room) return <div className="pt-32 text-center text-white">Ładowanie gry...</div>;
 
@@ -43,7 +44,7 @@ const Game = () => {
                     totalRounds={room.settings.rounds}
                     currentLetter={currentLetter}
                     phase={phase}
-                    mainTimeLeft={room.game.mainTimeLeft}
+                    mainTimeLeft={displayTimeLeft ?? room.game.mainTimeLeft}
                 />
             )}
 

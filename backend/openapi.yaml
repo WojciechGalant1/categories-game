@@ -30,10 +30,22 @@ info:
     injected from a `ConfigMap` (`backend-config`) and a `Secret` (`postgres-credentials`) in Kubernetes.
     The schema is created/updated automatically by Hibernate (`ddl-auto=update`).
 
+    ## Real-time updates (WebSocket)
+    Room state is pushed to clients over a **one-way WebSocket** at `/api/ws/rooms/{code}`.
+    After connecting, the client sends `{ "type": "subscribe", "playerId": "<uuid>" }`.
+    The server validates membership and pushes `{ "type": "room_state", "data": { ...Room... } }`
+    on every change. Heartbeat: client sends `{ "type": "ping" }` every 30s → `{ "type": "pong" }`.
+
+    **Mutations remain REST** (`POST /start`, `/stop`, `/vote`, etc.). After each mutation the backend
+    publishes the room code to **Redis Pub/Sub** (`room:updates`); every backend replica broadcasts
+    the fresh room state to its local WebSocket sessions — required for HPA (2–10 replicas).
+
+    `GET /api/rooms/{code}` is kept as a **fallback** (reconnect, debug, K8s probes).
+
     ## Scalable auto-stop
-    Round expiry is stored as `game.roundEndsAt` (Unix ms) in the room row — there are no
-    in-process timers. On every `GET /api/rooms/{code}` poll the backend runs a single atomic
-    `UPDATE` (Spring Data `@Modifying` query):
+    Round expiry is stored as `game.roundEndsAt` (Unix ms) in the room row. A scheduler runs every 1s
+    but only for room codes with **active WebSocket subscribers** on that pod (`RoomSessionRegistry`).
+    Per code it runs a single atomic `UPDATE` (Spring Data `@Modifying` query):
 
     ```sql
     UPDATE rooms SET status = 'reviewing'
@@ -41,10 +53,9 @@ info:
     ```
 
     Because the `WHERE` clause includes `status = 'playing'`, the row-level update is applied
-    at most once even when multiple backend replicas poll concurrently. This allows the backend
-    Deployment to scale to any number of replicas without split-brain timer issues.
-    `mainTimeLeft` is not persisted; it is recomputed on each read as
-    `max(0, (roundEndsAt - now) / 1000)`.
+    at most once even when multiple backend replicas run the check concurrently. `GET /api/rooms/{code}`
+    also runs auto-stop for fallback reads. `mainTimeLeft` is not persisted; it is recomputed on each
+    read/push as `max(0, (roundEndsAt - now) / 1000)`. The frontend decrements it locally between pushes.
   version: 1.0.0
   contact:
     name: Państwa Miasta Dev Team
@@ -122,14 +133,40 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
+  /ws/rooms/{code}:
+    get:
+      tags: [Rooms]
+      operationId: roomWebSocket
+      summary: WebSocket room state stream
+      description: |
+        **WebSocket endpoint** (not HTTP GET). Connect to `ws(s)://<host>/api/ws/rooms/{code}`.
+
+        **Client → server:**
+        - `{ "type": "subscribe", "playerId": "<uuid>" }` — first message after connect
+        - `{ "type": "ping" }` — heartbeat every 30s
+
+        **Server → client:**
+        - `{ "type": "room_state", "data": { ...Room... } }` — full room snapshot on subscribe and on every change
+        - `{ "type": "pong" }` — response to ping
+        - `{ "type": "error", "message": "..." }` — e.g. invalid playerId
+
+        Mutations (start, stop, vote, …) use REST endpoints; state changes are pushed via Redis Pub/Sub
+        to all backend replicas.
+      parameters:
+        - $ref: '#/components/parameters/RoomCode'
+      responses:
+        '101':
+          description: Switching Protocols (WebSocket upgrade)
+
   /rooms/{code}:
     get:
       tags: [Rooms]
       operationId: getRoomState
-      summary: Get room state (polling)
+      summary: Get room state (REST fallback)
       description: |
         Returns the full state of the room including players, settings, game state, and scores.
-        Used by the frontend for polling to keep the UI in sync.
+        Primary sync is via WebSocket (`/api/ws/rooms/{code}`); this endpoint is used as fallback
+        on reconnect and for debugging.
 
         When the room is in `playing` status, the response includes `mainTimeLeft`
         (seconds remaining in the round) computed directly from the persisted `game.roundEndsAt`

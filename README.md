@@ -12,6 +12,7 @@ flowchart LR
     feSvc --> feDep[Deployment frontend<br/>2 repliki<br/>nginx + Vite build]
     beSvc --> beDep[Deployment backend<br/>2-10 replik HPA<br/>Spring Boot + JPA]
     beDep -->|"jdbc:postgresql://postgres-0.postgres"| pgHl[Headless Service<br/>postgres clusterIP:None]
+    beDep -->|Pub/Sub room:updates| redis[Deployment redis:7-alpine]
     pgHl --> pgSs[StatefulSet postgres-0<br/>image postgres:16]
     pgSs --> pvc[(PVC 2Gi<br/>storageClass standard)]
 ```
@@ -22,10 +23,13 @@ flowchart LR
 | Frontend   | React 19 + Vite + Tailwind + nginx    | `frontend/`      | 
 | Backend    | Spring Boot 4 (Java 21) + Spring Data JPA | `backend/` | 
 | Baza       | PostgreSQL 16 (StatefulSet + PVC)     | -                | 
+| Redis      | redis:7-alpine (Pub/Sub broadcast WS) | `helm/pm/templates/redis-*.yaml` |
 | Wdrożenie  | Helm chart `pm`                       | `helm/pm/`       | 
 | Ekspozycja | ingress-nginx, path-based             | `helm/pm/templates/ingress.yaml` | 
 
 Frontend komunikuje się z backendem przez **relatywny** prefix `/api` (zob. [`frontend/src/services/api.ts`](frontend/src/services/api.ts)) — ten sam build chodzi za Ingressem niezależnie od hosta.
+
+Stan pokoju (lobby + gra) synchronizowany jest przez **WebSocket** (`/api/ws/rooms/{code}`) — hook [`useRoomWebSocket.ts`](frontend/src/hooks/useRoomWebSocket.ts). Mutacje (start, stop, głosowanie) nadal idą przez REST. Lista publicznych pokoi na stronie głównej nadal używa REST co 3s.
 
 ## Struktura 
 
@@ -44,7 +48,7 @@ Frontend komunikuje się z backendem przez **relatywny** prefix `/api` (zob. [`f
 │   ├── Chart.yaml
 │   ├── values.yaml
 │   ├── values-minikube.yaml
-│   └── templates/  # namespace, postgres, backend, frontend, ingress, hpa
+│   └── templates/  # namespace, postgres, redis, backend, frontend, ingress, hpa
 └── chat_export.json
 ```
 
@@ -249,7 +253,8 @@ Najważniejsze endpointy:
 - `GET /api/rooms` - lista publicznych pokoi w lobby
 - `POST /api/rooms` - utworzenie pokoju (`{nick, isPublic}`)
 - `POST /api/rooms/:code/join` - dołączenie do pokoju
-- `GET /api/rooms/:code` - pełny stan pokoju (polling)
+- `GET /api/rooms/:code` - pełny stan pokoju (REST fallback; główny sync przez WebSocket)
+- `WS /api/ws/rooms/:code` - push stanu pokoju (subscribe + ping/pong)
 - `POST /api/rooms/:code/settings` / `/start` / `/stop` / `/answers` / `/vote` / `/next-round` / `/reset`
 
 ## Ograniczenia
@@ -258,16 +263,28 @@ Najważniejsze endpointy:
 - **Pierwszy start backendu** jest wolniejszy (JVM + Hibernate schema), stąd podwyższone `initialDelaySeconds` w sondach.
 - **`helm upgrade` bez release**: samo `helm upgrade` failuje, gdy release nie istnieje — używaj `helm upgrade --install`.
 
-## Architektura auto-stop
+## Architektura auto-stop i WebSocket
 
-Czas trwania rundy jest przechowywany jako `game.roundEndsAt` (Unix ms) w PostgreSQL. Przy każdym `GET /api/rooms/{code}` backend wykonuje atomowy `UPDATE`:
+Czas trwania rundy jest przechowywany jako `game.roundEndsAt` (Unix ms) w PostgreSQL. Scheduler co 1s sprawdza **tylko pokoje z aktywnymi subskrypcjami WebSocket** na danym podzie i wykonuje atomowy `UPDATE`:
 
 ```sql
 UPDATE rooms SET status = 'reviewing'
 WHERE code = :code AND status = 'playing' AND round_ends_at <= :now
 ```
 
-Dzięki temu backend można skalować (HPA 2–10 replik). `mainTimeLeft` liczone dynamicznie przy każdym odczycie.
+Dzięki temu backend można skalować (HPA 2–10 replik). Po każdej mutacji REST backend publikuje kod pokoju do **Redis Pub/Sub** (`room:updates`); każda replika pushuje świeży stan do swoich klientów WS. `mainTimeLeft` liczone dynamicznie przy pushu; frontend odlicza lokalnie między pushami.
+
+**Redis** — 1 replika wystarczy na lab; restart Redisa zrywa subskrypcje Pub/Sub (klienci WS reconnectują). W prod rozważ Redis Sentinel / ElastiCache.
+
+Po zmianach backendu wymagany rebuild obrazu:
+
+```bash
+eval $(minikube docker-env)
+docker build -t pm-backend:3.0 backend/
+docker build -t pm-frontend:1.0 frontend/   # po zmianach frontendu
+helm upgrade --install pm ./helm/pm -n pm-app \
+  -f helm/pm/values.yaml -f helm/pm/values-minikube.yaml
+```
 
 ## HPA (Horizontal Pod Autoscaler)
 
