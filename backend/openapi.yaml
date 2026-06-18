@@ -21,14 +21,17 @@ info:
 
     ## Persistence (PostgreSQL + JPA)
     The backend is a Spring Boot (Java 21) application using Spring Data JPA / Hibernate.
-    Room state is persisted in PostgreSQL: a `rooms` table (primary key `code`) and a
-    `players` table (foreign key `room_code`). Nested structures (`scores`, `settings.categories`,
+    Room state is persisted in PostgreSQL: a `rooms` table (primary key `code`, `varchar(10)`) and a
+    `players` table (foreign key `room_code` → `rooms.code` with **ON DELETE CASCADE**, indexed by
+    `idx_players_room_code`). Nested structures (`scores`, `settings.categories`,
     `game.answers`, `game.votes`, `game.stoppedPlayers`) are stored as PostgreSQL `JSONB` columns.
 
     Connection parameters come from environment variables
     (`SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, `SPRING_DATASOURCE_PASSWORD`),
     injected from a `ConfigMap` (`backend-config`) and a `Secret` (`postgres-credentials`) in Kubernetes.
-    The schema is created/updated automatically by Hibernate (`ddl-auto=update`).
+    The schema is created/updated automatically by Hibernate (`ddl-auto=update`). When upgrading an
+    existing database, run `backend/src/main/resources/db/migrate-players-fk-cascade.sql` once — Hibernate
+    does not alter existing FK constraints or column types reliably.
 
     ## Real-time updates (WebSocket)
     Room state is pushed to clients over a **one-way WebSocket** at `/api/ws/rooms/{code}`.

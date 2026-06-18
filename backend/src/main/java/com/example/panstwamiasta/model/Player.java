@@ -5,7 +5,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.persistence.*;
 
 @Entity
-@Table(name = "players")
+@Table(name = "players", indexes = @Index(name = "idx_players_room_code", columnList = "room_code"))
 public class Player {
     @Id
     private UUID id;
@@ -13,7 +13,7 @@ public class Player {
     private String nick;
     private boolean isHost;
 
-    @Column(name = "room_code")
+    @Column(name = "room_code", length = 10)
     private String roomCode;
 
     public Player() {}

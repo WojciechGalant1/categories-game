@@ -260,6 +260,13 @@ Najważniejsze endpointy:
 ## Ograniczenia
 
 - **Restart Postgresa**: PVC `postgres-data-postgres-0` przeżywa `helm uninstall` (PVC nie jest usuwany domyślnie) i zostanie ponownie zbindowany przy re-install.
+- **Upgrade schematu DB**: przy aktualizacji z wcześniejszej wersji (FK bez CASCADE, `varchar(255)`) uruchom jednorazowo:
+
+```bash
+kubectl exec -i -n pm-app postgres-0 -- psql -U pm -d pm \
+  < backend/src/main/resources/db/migrate-players-fk-cascade.sql
+```
+
 - **Pierwszy start backendu** jest wolniejszy (JVM + Hibernate schema), stąd podwyższone `initialDelaySeconds` w sondach.
 - **`helm upgrade` bez release**: samo `helm upgrade` failuje, gdy release nie istnieje — używaj `helm upgrade --install`.
 

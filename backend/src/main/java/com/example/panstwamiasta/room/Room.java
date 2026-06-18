@@ -5,6 +5,8 @@ import com.example.panstwamiasta.model.Player;
 import com.example.panstwamiasta.model.RoomSettings;
 import jakarta.persistence.*;
 import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.annotations.OnDelete;
+import org.hibernate.annotations.OnDeleteAction;
 import org.hibernate.type.SqlTypes;
 
 import java.util.List;
@@ -14,6 +16,7 @@ import java.util.Map;
 @Table(name = "rooms")
 public class Room {
     @Id
+    @Column(length = 10)
     private String code;
 
     private boolean isPublic;
@@ -23,6 +26,7 @@ public class Room {
 
     @OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)
     @JoinColumn(name = "room_code")
+    @OnDelete(action = OnDeleteAction.CASCADE)
     private List<Player> players;
 
     @JdbcTypeCode(SqlTypes.JSON)
