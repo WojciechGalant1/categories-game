@@ -14,12 +14,15 @@ public class GameState {
     private Long roundEndsAt; // Unix ms when the round auto-stops; source of truth for the timer
 
     @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "jsonb")
     private Map<String, Map<String, String>> answers; // playerId -> category -> answer
 
     @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "jsonb")
     private Map<String, Map<String, Map<String, Boolean>>> votes; // targetPlayerId -> category -> voterId -> isValid
 
     @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "jsonb")
     private List<String> stoppedPlayers; // player UUIDs
 
     @Transient

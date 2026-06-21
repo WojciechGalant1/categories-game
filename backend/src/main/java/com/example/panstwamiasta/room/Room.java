@@ -30,6 +30,7 @@ public class Room {
     private List<Player> players;
 
     @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "jsonb")
     private Map<String, Integer> scores; // playerId -> score
 
     @Embedded

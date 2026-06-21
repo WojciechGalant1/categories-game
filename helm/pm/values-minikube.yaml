@@ -4,5 +4,9 @@ namespace:
 global:
   imagePullPolicy: Never
 
+postgres:
+  flyway:
+    baselineOnMigrate: false
+
 ingress:
   host: pm.local

@@ -8,6 +8,7 @@ import org.hibernate.type.SqlTypes;
 @Embeddable
 public class RoomSettings {
     @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "jsonb")
     private List<String> categories;
 
     private Integer timePerRound;

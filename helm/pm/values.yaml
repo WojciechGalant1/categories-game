@@ -17,6 +17,8 @@ postgres:
     create: false
     user: pm
     database: pm
+  flyway:
+    baselineOnMigrate: false
   resources:
     requests:
       cpu: "200m"
@@ -51,7 +53,7 @@ postgres:
 backend:
   image:
     repository: pm-backend
-    tag: "3.0"
+    tag: "3.1-flyway"
   replicas: 2
   serverPort: 3000
   service:

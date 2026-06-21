@@ -238,6 +238,7 @@ Parametry bazowe: [`helm/pm/values.yaml`](helm/pm/values.yaml). Override minikub
 | --------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | Postgres mode               | `values.yaml` → `postgres.mode`                                                             | `cnpg` (legacy StatefulSet: `legacy`)                  |
 | CNPG Cluster                | `values.yaml` → `postgres.cnpg.*`                                                           | `pm-postgres`, 3 instancje, `max_connections: 200`     |
+| Flyway baseline (brownfield)| `values-minikube.yaml` → `postgres.flyway.baselineOnMigrate`                                  | `true` jednorazowo, potem `false`                      |
 | Hasło Postgres              | Secret `postgres-credentials` (klucze `username`/`password` + `POSTGRES_*`)                 | `pm` / `pmpass` / `pm`                                 |
 | Datasource URL              | `configmap.yaml` → `pm.postgres.jdbcUrl`                                                    | `pm-postgres-rw.pm-app.svc...:5432/pm`                 |
 | HikariCP pool               | `values.yaml` → `backend.hikari.maximumPoolSize`                                            | 5 (10 podów HPA × 5 = 50 połączeń)                     |
@@ -287,7 +288,39 @@ PVC `postgres-data-postgres-0` **nie jest** adoptowany przez CNPG.
 2. `helm upgrade` z `postgres.mode=cnpg`
 3. Poczekaj: `kubectl wait --for=jsonpath='{.status.phase}'="Cluster in healthy state" cluster/pm-postgres -n pm-app --timeout=300s`
 4. `pg_restore` do `pm-postgres-rw`
-5. Opcjonalnie: [`migrate-players-fk-cascade.sql`](backend/src/main/resources/db/migrate-players-fk-cascade.sql)
+
+### Flyway (migracje schematu)
+
+Schemat zarządza **Flyway** przy starcie backendu (`spring-boot-starter-flyway` + `flyway-database-postgresql`).
+Hibernate: `ddl-auto=validate` — nie modyfikuje schematu.
+
+Migracje: [`backend/src/main/resources/db/migration/`](backend/src/main/resources/db/migration/)
+
+| Plik | Opis |
+|------|------|
+| `V1__initial_schema.sql` | Pełny schemat (świeże bazy) |
+| `V2__players_fk_cascade.sql` | Idempotentny fix FK CASCADE (brownfield) |
+
+**Nowa migracja:** dodaj `V3__opis.sql`, rebuild backendu, restart deploymentu.
+
+**Brownfield** (baza CNPG utworzona przez stary `ddl-auto=update`, bez `flyway_schema_history`):
+
+1. W [`values-minikube.yaml`](helm/pm/values-minikube.yaml): `postgres.flyway.baselineOnMigrate: true`
+2. `helm upgrade` + restart backendu → baseline v1 + uruchomienie V2
+3. Po sukcesie ustaw z powrotem `baselineOnMigrate: false`
+
+**Lokalny test (przed docker build):**
+
+```bash
+docker run --rm -d --name pm-pg-test -e POSTGRES_DB=pm -e POSTGRES_USER=pm \
+  -e POSTGRES_PASSWORD=pmpass -p 5432:5432 postgres:16
+docker run --rm -d --name pm-redis-test -p 6379:6379 redis:7-alpine
+cd backend
+export SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/pm
+export SPRING_DATASOURCE_USERNAME=pm SPRING_DATASOURCE_PASSWORD=pmpass
+export FLYWAY_BASELINE_ON_MIGRATE=false
+./mvnw spring-boot:run
+```
 
 ### Test failover (lab)
 
@@ -316,13 +349,7 @@ helm upgrade --install pm ./helm/pm -n pm-app \
 ## Ograniczenia
 
 - **CloudNativePG PVC**: każda instancja ma własny PVC; `helm uninstall` nie usuwa PVC domyślnie.
-- **Upgrade schematu DB**: przy aktualizacji z wcześniejszej wersji (FK bez CASCADE, `varchar(255)`) uruchom jednorazowo:
-
-```bash
-PRIMARY=$(kubectl get cluster pm-postgres -n pm-app -o jsonpath='{.status.currentPrimary}')
-kubectl exec -i -n pm-app "$PRIMARY" -- psql -U pm -d pm \
-  < backend/src/main/resources/db/migrate-players-fk-cascade.sql
-```
+- **Flyway brownfield**: jednorazowo `postgres.flyway.baselineOnMigrate: true` w values-minikube; potem wyłącz.
 
 - **Pierwszy start backendu** jest wolniejszy (JVM + Hibernate schema), stąd podwyższone `initialDelaySeconds` w sondach.
 - **`helm upgrade` bez release**: samo `helm upgrade` failuje, gdy release nie istnieje — używaj `helm upgrade --install`.

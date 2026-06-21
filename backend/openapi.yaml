@@ -29,7 +29,10 @@ info:
     Connection parameters come from environment variables
     (`SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, `SPRING_DATASOURCE_PASSWORD`,
     `SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE`), injected from `backend-config` ConfigMap and
-    `postgres-credentials` Secret. Production backups use the Barman Cloud plugin (`ObjectStore` + `ScheduledBackup`).
+    `postgres-credentials` Secret. **Schema migrations** run via **Flyway** at startup
+    (`backend/src/main/resources/db/migration/V*.sql`); Hibernate uses `ddl-auto=validate` only.
+    Brownfield upgrade: set `FLYWAY_BASELINE_ON_MIGRATE=true` once (Helm `postgres.flyway.baselineOnMigrate`).
+    Production backups use the Barman Cloud plugin (`ObjectStore` + `ScheduledBackup`).
 
     ## Real-time updates (WebSocket)
     Room state is pushed to clients over a **one-way WebSocket** at `/api/ws/rooms/{code}`.

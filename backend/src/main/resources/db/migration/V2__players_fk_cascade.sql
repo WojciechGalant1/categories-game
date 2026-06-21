@@ -1,7 +1,6 @@
--- One-time migration for existing databases created before ON DELETE CASCADE.
--- ddl-auto=update does not alter existing FK constraints or column types reliably.
+-- Brownfield fix: idempotent upgrade from Hibernate ddl-auto schema.
+-- Safe to run after V1 (drops/re-adds FK, ensures varchar(10) and index).
 
--- 1) Drop old FK (Hibernate-generated name varies)
 DO $$
 DECLARE r RECORD;
 BEGIN
@@ -16,7 +15,6 @@ BEGIN
   END LOOP;
 END $$;
 
--- 2) varchar(10) + CASCADE FK + index
 ALTER TABLE rooms ALTER COLUMN code TYPE varchar(10);
 ALTER TABLE players ALTER COLUMN room_code TYPE varchar(10);
 
