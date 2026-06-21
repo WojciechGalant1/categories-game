@@ -5,7 +5,8 @@ metadata:
   namespace: {{ include "pm.namespace" . }}
 data:
   SERVER_PORT: {{ .Values.backend.serverPort | quote }}
-  SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres-0.postgres.{{ include "pm.namespace" . }}.svc.cluster.local:5432/{{ .Values.postgres.credentials.database }}"
+  SPRING_DATASOURCE_URL: {{ include "pm.postgres.jdbcUrl" . | quote }}
+  SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: {{ .Values.backend.hikari.maximumPoolSize | quote }}
   {{- if .Values.redis.enabled }}
   SPRING_DATA_REDIS_HOST: {{ .Values.redis.host | quote }}
   SPRING_DATA_REDIS_PORT: {{ .Values.redis.port | quote }}

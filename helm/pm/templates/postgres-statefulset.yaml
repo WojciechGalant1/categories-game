@@ -1,3 +1,4 @@
+{{- if eq .Values.postgres.mode "legacy" }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -59,3 +60,4 @@ spec:
         resources:
           requests:
             storage: {{ .Values.postgres.storage }}
+{{- end }}

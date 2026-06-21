@@ -6,6 +6,7 @@ global:
   imagePullPolicy: IfNotPresent
 
 postgres:
+  mode: cnpg
   image:
     repository: postgres
     tag: "16"
@@ -14,6 +15,7 @@ postgres:
   credentialsSecret: postgres-credentials
   credentials:
     create: false
+    user: pm
     database: pm
   resources:
     requests:
@@ -22,6 +24,29 @@ postgres:
     limits:
       cpu: "1"
       memory: "1Gi"
+  cnpg:
+    clusterName: pm-postgres
+    instances: 3
+    primaryUpdateStrategy: unsupervised
+    imageName: ghcr.io/cloudnative-pg/postgresql:16
+    storage: 2Gi
+    storageClassName: standard
+    parameters:
+      maxConnections: "200"
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+    backup:
+      enabled: false
+      pluginName: barman-cloud.cloudnative-pg.io
+      objectStoreName: pm-postgres-store
+      schedule: "0 0 2 * * *"
+      destinationPath: ""
+      s3CredentialsSecret: pm-postgres-s3-credentials
 
 backend:
   image:
@@ -31,6 +56,8 @@ backend:
   serverPort: 3000
   service:
     port: 3000
+  hikari:
+    maximumPoolSize: 5
   resources:
     requests:
       cpu: "250m"

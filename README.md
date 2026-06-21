@@ -11,10 +11,10 @@ flowchart LR
     ingress -->|path /api| beSvc[Service<br/>backend-svc:3000]
     feSvc --> feDep[Deployment frontend<br/>2 repliki<br/>nginx + Vite build]
     beSvc --> beDep[Deployment backend<br/>2-10 replik HPA<br/>Spring Boot + JPA]
-    beDep -->|"jdbc:postgresql://postgres-0.postgres"| pgHl[Headless Service<br/>postgres clusterIP:None]
+    beDep -->|"jdbc:postgresql://pm-postgres-rw"| pgRw[Service pm-postgres-rw]
     beDep -->|Pub/Sub room:updates| redis[Deployment redis:7-alpine]
-    pgHl --> pgSs[StatefulSet postgres-0<br/>image postgres:16]
-    pgSs --> pvc[(PVC 2Gi<br/>storageClass standard)]
+    pgRw --> cnpg[CloudNativePG Cluster<br/>pm-postgres x3]
+    cnpg --> pvc[(PVC 2Gi x3<br/>storageClass standard)]
 ```
 
 
@@ -22,7 +22,7 @@ flowchart LR
 | ---------- | ------------------------------------- | ---------------- | 
 | Frontend   | React 19 + Vite + Tailwind + nginx    | `frontend/`      | 
 | Backend    | Spring Boot 4 (Java 21) + Spring Data JPA | `backend/` | 
-| Baza       | PostgreSQL 16 (StatefulSet + PVC)     | -                | 
+| Baza       | PostgreSQL 16 (CloudNativePG Cluster, 3 instancje) | `helm/pm/templates/postgres-cluster.yaml` |
 | Redis      | redis:7-alpine (Pub/Sub broadcast WS) | `helm/pm/templates/redis-*.yaml` |
 | Wdrożenie  | Helm chart `pm`                       | `helm/pm/`       | 
 | Ekspozycja | ingress-nginx, path-based             | `helm/pm/templates/ingress.yaml` | 
@@ -48,7 +48,8 @@ Stan pokoju (lobby + gra) synchronizowany jest przez **WebSocket** (`/api/ws/roo
 │   ├── Chart.yaml
 │   ├── values.yaml
 │   ├── values-minikube.yaml
-│   └── templates/  # namespace, postgres, redis, backend, frontend, ingress, hpa
+│   ├── values-prod.yaml
+│   └── templates/  # namespace, cnpg postgres, redis, backend, frontend, ingress, hpa
 └── chat_export.json
 ```
 
@@ -69,7 +70,16 @@ minikube addons enable ingress
 minikube addons enable metrics-server   # wymagane dla HPA i kubectl top
 ```
 
-### 2. Build obrazów w demonie minikube
+### 2. CloudNativePG operator (jednorazowo)
+
+```bash
+helm repo add cnpg https://cloudnative-pg.github.io/charts
+helm upgrade --install cnpg cnpg/cloudnative-pg -n cnpg-system --create-namespace
+```
+
+Na minikube **nie** instaluj pluginu Barman — backupy włączane są tylko w prod (`values-prod.yaml`).
+
+### 3. Build obrazów w demonie minikube
 
 ```bash
 eval $(minikube -p minikube docker-env --shell bash)
@@ -77,21 +87,25 @@ docker build -t pm-backend:3.0 backend/
 docker build -t pm-frontend:1.0 frontend/
 ```
 
-### 3. Secret Postgres (poza chartem — hasła nie trafiają do git)
+### 4. Secret Postgres (poza chartem — hasła nie trafiają do git)
 
-Secret musi istnieć **przed** `helm install` — Postgres startuje od razu i odwołuje się do `postgres-credentials`.
+Secret musi istnieć **przed** `helm install` — CloudNativePG `Cluster` odwołuje się do `postgres-credentials` przy bootstrap.
 
 ```bash
 kubectl create namespace pm-app --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl create secret generic postgres-credentials \
+  --from-literal=username=pm \
+  --from-literal=password=pmpass \
   --from-literal=POSTGRES_USER=pm \
   --from-literal=POSTGRES_PASSWORD=pmpass \
   --from-literal=POSTGRES_DB=pm \
   -n pm-app --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-### 4. Wdrożenie Helm chart
+Klucze `username`/`password` — wymagane przez CNPG; `POSTGRES_*` — kompatybilność wsteczna.
+
+### 5. Wdrożenie Helm chart
 
 Używaj **`helm upgrade --install`** — tworzy release przy pierwszym uruchomieniu i aktualizuje przy kolejnych.
 
@@ -100,7 +114,8 @@ helm upgrade --install pm ./helm/pm -n pm-app \
   -f helm/pm/values.yaml \
   -f helm/pm/values-minikube.yaml
 
-kubectl wait --for=condition=Ready pod/postgres-0 -n pm-app --timeout=300s
+kubectl wait --for=jsonpath='{.status.phase}'="Cluster in healthy state" \
+  cluster/pm-postgres -n pm-app --timeout=300s
 kubectl wait --for=condition=Ready pod --all -n pm-app --timeout=180s
 kubectl get all,hpa,ingress -n pm-app
 helm list -n pm-app
@@ -186,8 +201,7 @@ curl http://pm.local/api/rooms
 curl -X POST -H 'Content-Type: application/json' \
      -d '{"nick":"tester","isPublic":true}' \
      http://pm.local/api/rooms
-kubectl exec -n pm-app postgres-0 -- \
-     psql -U pm -d pm -c 'SELECT code, status FROM rooms;'
+kubectl exec -n pm-app pm-postgres-1 -- psql -U postgres -d pm -c 'SELECT code, status FROM rooms;'
 ```
 
 Aplikacja w przeglądarce: <http://pm.local>
@@ -214,17 +228,20 @@ minikube delete
 
 ### Odtworzenie po restarcie minikube
 
-Po `minikube delete` / restarcie klastra release Helm znika. Pełna sekwencja od nowa: kroki 1 → 3 (namespace + secret) → 4 (`helm upgrade --install`) → 5 → 7 (tunnel) → 8.
+Po `minikube delete` / restarcie klastra release Helm znika. Pełna sekwencja od nowa: kroki 1 → 2 (CNPG operator) → 4 (namespace + secret) → 5 (`helm upgrade --install`) → tunnel → 8.
 
 ## Konfiguracja
 
-Parametry bazowe: [`helm/pm/values.yaml`](helm/pm/values.yaml). Override minikube: [`helm/pm/values-minikube.yaml`](helm/pm/values-minikube.yaml) (`imagePullPolicy: Never`, `namespace.create: false`).
+Parametry bazowe: [`helm/pm/values.yaml`](helm/pm/values.yaml). Override minikube: [`helm/pm/values-minikube.yaml`](helm/pm/values-minikube.yaml). Prod + Barman: [`helm/pm/values-prod.yaml`](helm/pm/values-prod.yaml).
 
 |                           | Gdzie                                                                                       | Domyślnie                                              |
 | --------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| Hasło Postgres              | Secret `postgres-credentials` (poza chartem, `kubectl create secret`)                       | `pm` / `pmpass` / `pm`                                 |
-| Datasource URL              | `helm/pm/templates/configmap.yaml` (szablon JDBC)                                         | `postgres-0.postgres.pm-app.svc...:5432/pm`            |
-| Rozmiar wolumenu Postgres   | `values.yaml` → `postgres.storage`                                                          | 2Gi, `storageClassName: standard`                      |
+| Postgres mode               | `values.yaml` → `postgres.mode`                                                             | `cnpg` (legacy StatefulSet: `legacy`)                  |
+| CNPG Cluster                | `values.yaml` → `postgres.cnpg.*`                                                           | `pm-postgres`, 3 instancje, `max_connections: 200`     |
+| Hasło Postgres              | Secret `postgres-credentials` (klucze `username`/`password` + `POSTGRES_*`)                 | `pm` / `pmpass` / `pm`                                 |
+| Datasource URL              | `configmap.yaml` → `pm.postgres.jdbcUrl`                                                    | `pm-postgres-rw.pm-app.svc...:5432/pm`                 |
+| HikariCP pool               | `values.yaml` → `backend.hikari.maximumPoolSize`                                            | 5 (10 podów HPA × 5 = 50 połączeń)                     |
+| Rozmiar wolumenu Postgres   | `values.yaml` → `postgres.cnpg.storage`                                                     | 2Gi × 3, `storageClassName: standard`                  |
 | Liczba replik frontendu     | `values.yaml` → `frontend.replicas`                                                         | 2                                                      |
 | Liczba replik backendu      | `values.yaml` → `backend.replicas` + `hpa.*`                                                | min 2, max 10 (HPA: **tylko CPU** 70%)                 |
 | Obrazy Docker               | `values.yaml` → `backend.image`, `frontend.image`                                           | `pm-backend:3.0`, `pm-frontend:1.0`                    |
@@ -238,6 +255,7 @@ Chart [`helm/pm/`](helm/pm/) pakuje wszystkie zasoby Kubernetes aplikacji:
 - **Chart.yaml** — metadane chartu (`name: pm`, `version: 0.1.0`)
 - **values.yaml** — domyślne wartości (bez haseł; tylko `postgres.credentialsSecret`)
 - **values-minikube.yaml** — override minikube: `imagePullPolicy: Never`, `namespace.create: false`
+- **values-prod.yaml** — prod: Barman backup, `primaryUpdateStrategy: supervised`, wyższe resources
 - **templates/** — szablony Go Template generujące manifesty
 
 Secret Postgres **nie jest** w repozytorium — tworzony ręcznie przed wdrożeniem. Opcjonalnie `postgres.credentials.create: true` + `--set postgres.credentials.user=... --set postgres.credentials.password=...` tylko na lokalny dev (nie commitować haseł).
@@ -257,13 +275,52 @@ Najważniejsze endpointy:
 - `WS /api/ws/rooms/:code` - push stanu pokoju (subscribe + ping/pong)
 - `POST /api/rooms/:code/settings` / `/start` / `/stop` / `/answers` / `/vote` / `/next-round` / `/reset` / `/leave`
 
+## PostgreSQL (CloudNativePG)
+
+Baza działa jako **CloudNativePG `Cluster`** (`pm-postgres`, 3 instancje = quorum). Backend łączy się przez serwis **`pm-postgres-rw`**. PDB (`maxUnavailable: 1`) chroni przed jednoczesnym evictem wielu instancji przy `kubectl drain`.
+
+### Migracja ze starego StatefulSet
+
+PVC `postgres-data-postgres-0` **nie jest** adoptowany przez CNPG.
+
+1. `pg_dump` ze starego `postgres-0` (przed usunięciem StatefulSet)
+2. `helm upgrade` z `postgres.mode=cnpg`
+3. Poczekaj: `kubectl wait --for=jsonpath='{.status.phase}'="Cluster in healthy state" cluster/pm-postgres -n pm-app --timeout=300s`
+4. `pg_restore` do `pm-postgres-rw`
+5. Opcjonalnie: [`migrate-players-fk-cascade.sql`](backend/src/main/resources/db/migrate-players-fk-cascade.sql)
+
+### Test failover (lab)
+
+```bash
+PRIMARY=$(kubectl get cluster pm-postgres -n pm-app -o jsonpath='{.status.currentPrimary}')
+kubectl exec -n pm-app "$PRIMARY" -- \
+  psql -U postgres -d pm -c "SELECT application_name, state, sent_lsn, write_lsn FROM pg_stat_replication;"
+kubectl delete pod "$PRIMARY" -n pm-app
+kubectl wait --for=jsonpath='{.status.phase}'="Cluster in healthy state" \
+  cluster/pm-postgres -n pm-app --timeout=120s
+kubectl get cluster pm-postgres -n pm-app -o jsonpath='New primary: {.status.currentPrimary}{"\n"}'
+curl http://pm.local/api/rooms
+```
+
+### Prod: backup Barman PITR
+
+```bash
+helm upgrade --install cnpg-plugin-barman-cloud cnpg/plugin-barman-cloud -n cnpg-system
+kubectl create secret generic pm-postgres-s3-credentials \
+  --from-literal=ACCESS_KEY_ID=... --from-literal=SECRET_ACCESS_KEY=... -n pm-app
+helm upgrade --install pm ./helm/pm -n pm-app \
+  -f helm/pm/values.yaml -f helm/pm/values-prod.yaml \
+  --set postgres.cnpg.backup.destinationPath=s3://YOUR-BUCKET/pm-postgres/
+```
+
 ## Ograniczenia
 
-- **Restart Postgresa**: PVC `postgres-data-postgres-0` przeżywa `helm uninstall` (PVC nie jest usuwany domyślnie) i zostanie ponownie zbindowany przy re-install.
+- **CloudNativePG PVC**: każda instancja ma własny PVC; `helm uninstall` nie usuwa PVC domyślnie.
 - **Upgrade schematu DB**: przy aktualizacji z wcześniejszej wersji (FK bez CASCADE, `varchar(255)`) uruchom jednorazowo:
 
 ```bash
-kubectl exec -i -n pm-app postgres-0 -- psql -U pm -d pm \
+PRIMARY=$(kubectl get cluster pm-postgres -n pm-app -o jsonpath='{.status.currentPrimary}')
+kubectl exec -i -n pm-app "$PRIMARY" -- psql -U pm -d pm \
   < backend/src/main/resources/db/migrate-players-fk-cascade.sql
 ```
 

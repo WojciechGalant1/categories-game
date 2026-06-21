@@ -1,31 +1,58 @@
-1. Utwórz Secret poza chartem (jeśli jeszcze nie istnieje):
+1. CloudNativePG operator (jednorazowo, poza chartem pm):
+
+  helm repo add cnpg https://cloudnative-pg.github.io/charts
+  helm upgrade --install cnpg cnpg/cloudnative-pg -n cnpg-system --create-namespace
+
+  Prod (backup Barman): dodatkowo
+  helm upgrade --install cnpg-plugin-barman-cloud cnpg/plugin-barman-cloud -n cnpg-system
+
+2. Secret Postgres (poza chartem — hasła nie trafiają do git):
 
   kubectl create secret generic {{ .Values.postgres.credentialsSecret }} \
+    --from-literal=username=pm \
+    --from-literal=password=pmpass \
     --from-literal=POSTGRES_USER=pm \
     --from-literal=POSTGRES_PASSWORD=pmpass \
     --from-literal=POSTGRES_DB={{ .Values.postgres.credentials.database }} \
     -n {{ include "pm.namespace" . }} --dry-run=client -o yaml | kubectl apply -f -
 
-2. Wpis w /etc/hosts (po minikube tunnel):
+3. Wpis w /etc/hosts (po minikube tunnel):
 
   127.0.0.1 {{ .Values.ingress.host }}
 
-3. Uruchom minikube tunnel w osobnym terminalu:
+4. Uruchom minikube tunnel w osobnym terminalu:
 
   minikube tunnel
 
-4. Weryfikacja:
+5. Weryfikacja:
 
   curl http://{{ .Values.ingress.host }}/
   curl http://{{ .Values.ingress.host }}/api/rooms
   kubectl get hpa -n {{ include "pm.namespace" . }}
+{{- if eq .Values.postgres.mode "cnpg" }}
 
-5. Helm:
+  PostgreSQL (CloudNativePG):
+  kubectl get cluster {{ .Values.postgres.cnpg.clusterName }} -n {{ include "pm.namespace" . }}
+  kubectl wait --for=jsonpath='{.status.phase}'="Cluster in healthy state" \
+    cluster/{{ .Values.postgres.cnpg.clusterName }} -n {{ include "pm.namespace" . }} --timeout=300s
+  kubectl get pods -n {{ include "pm.namespace" . }} -l cnpg.io/cluster={{ .Values.postgres.cnpg.clusterName }}
+{{- else }}
 
-  helm upgrade {{ .Release.Name }} {{ .Chart.Name }} -n {{ include "pm.namespace" . }} -f values-minikube.yaml
+  PostgreSQL (legacy StatefulSet):
+  kubectl wait --for=condition=Ready pod/postgres-0 -n {{ include "pm.namespace" . }} --timeout=300s
+{{- end }}
+
+6. Helm:
+
+  helm upgrade {{ .Release.Name }} ./helm/pm -n {{ include "pm.namespace" . }} \
+    -f helm/pm/values.yaml -f helm/pm/values-minikube.yaml
   helm rollback {{ .Release.Name }} -n {{ include "pm.namespace" . }}
 
-6. Redis (WebSocket broadcast + TTL pokoi):
+  Prod z backupami Barman:
+  helm upgrade {{ .Release.Name }} ./helm/pm -n {{ include "pm.namespace" . }} \
+    -f helm/pm/values.yaml -f helm/pm/values-prod.yaml
+
+7. Redis (WebSocket broadcast + TTL pokoi):
 
   Redis Pub/Sub synchronizuje push stanu pokoju miedzy replikami backendu (HPA).
   notify-keyspace-events Ex — usuwanie pokoju z Postgres po wygasnieciu room:deletion:*.

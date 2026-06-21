@@ -38,3 +38,36 @@ Namespace
 {{- define "pm.namespace" -}}
 {{- .Values.namespace.name }}
 {{- end }}
+
+{{/*
+PostgreSQL JDBC URL (legacy StatefulSet vs CloudNativePG)
+*/}}
+{{- define "pm.postgres.jdbcUrl" -}}
+{{- if eq .Values.postgres.mode "cnpg" -}}
+jdbc:postgresql://{{ .Values.postgres.cnpg.clusterName }}-rw.{{ include "pm.namespace" . }}.svc.cluster.local:5432/{{ .Values.postgres.credentials.database }}
+{{- else -}}
+jdbc:postgresql://postgres-0.postgres.{{ include "pm.namespace" . }}.svc.cluster.local:5432/{{ .Values.postgres.credentials.database }}
+{{- end -}}
+{{- end }}
+
+{{/*
+Secret key for DB username (CNPG uses username; legacy uses POSTGRES_USER)
+*/}}
+{{- define "pm.postgres.secretUserKey" -}}
+{{- if eq .Values.postgres.mode "cnpg" -}}
+username
+{{- else -}}
+POSTGRES_USER
+{{- end -}}
+{{- end }}
+
+{{/*
+Secret key for DB password
+*/}}
+{{- define "pm.postgres.secretPasswordKey" -}}
+{{- if eq .Values.postgres.mode "cnpg" -}}
+password
+{{- else -}}
+POSTGRES_PASSWORD
+{{- end -}}
+{{- end }}

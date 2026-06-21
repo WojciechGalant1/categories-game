@@ -30,12 +30,12 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.postgres.credentialsSecret }}
-                  key: POSTGRES_USER
+                  key: {{ include "pm.postgres.secretUserKey" . }}
             - name: SPRING_DATASOURCE_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.postgres.credentialsSecret }}
-                  key: POSTGRES_PASSWORD
+                  key: {{ include "pm.postgres.secretPasswordKey" . }}
           readinessProbe:
             httpGet:
               path: /api/rooms

@@ -1,0 +1,14 @@
+postgres:
+  cnpg:
+    primaryUpdateStrategy: supervised
+    resources:
+      requests:
+        cpu: "200m"
+        memory: "256Mi"
+      limits:
+        cpu: "1"
+        memory: "1Gi"
+    backup:
+      enabled: true
+      destinationPath: s3://YOUR-BUCKET/pm-postgres/
+      s3CredentialsSecret: pm-postgres-s3-credentials

@@ -1,0 +1,33 @@
+{{- if eq .Values.postgres.mode "cnpg" }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ .Values.postgres.cnpg.clusterName }}
+  namespace: {{ include "pm.namespace" . }}
+spec:
+  instances: {{ .Values.postgres.cnpg.instances }}
+  primaryUpdateStrategy: {{ .Values.postgres.cnpg.primaryUpdateStrategy }}
+  imageName: {{ .Values.postgres.cnpg.imageName }}
+  postgresql:
+    parameters:
+      max_connections: {{ .Values.postgres.cnpg.parameters.maxConnections | quote }}
+  storage:
+    size: {{ .Values.postgres.cnpg.storage }}
+    storageClass: {{ .Values.postgres.cnpg.storageClassName }}
+  bootstrap:
+    initdb:
+      database: {{ .Values.postgres.credentials.database }}
+      owner: {{ .Values.postgres.credentials.user | default "pm" }}
+      secret:
+        name: {{ .Values.postgres.credentialsSecret }}
+  {{- if .Values.postgres.cnpg.backup.enabled }}
+  plugins:
+    - name: {{ .Values.postgres.cnpg.backup.pluginName }}
+      enabled: true
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: {{ .Values.postgres.cnpg.backup.objectStoreName }}
+  {{- end }}
+  resources:
+    {{- toYaml .Values.postgres.cnpg.resources | nindent 4 }}
+{{- end }}

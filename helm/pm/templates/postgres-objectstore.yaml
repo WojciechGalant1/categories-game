@@ -1,0 +1,19 @@
+{{- if and (eq .Values.postgres.mode "cnpg") .Values.postgres.cnpg.backup.enabled }}
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: {{ .Values.postgres.cnpg.backup.objectStoreName }}
+  namespace: {{ include "pm.namespace" . }}
+spec:
+  configuration:
+    destinationPath: {{ required "postgres.cnpg.backup.destinationPath is required when backup.enabled=true" .Values.postgres.cnpg.backup.destinationPath }}
+    s3Credentials:
+      accessKeyId:
+        name: {{ .Values.postgres.cnpg.backup.s3CredentialsSecret }}
+        key: ACCESS_KEY_ID
+      secretAccessKey:
+        name: {{ .Values.postgres.cnpg.backup.s3CredentialsSecret }}
+        key: SECRET_ACCESS_KEY
+    wal:
+      compression: gzip
+{{- end }}

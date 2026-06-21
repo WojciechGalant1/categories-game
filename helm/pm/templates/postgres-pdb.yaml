@@ -1,0 +1,12 @@
+{{- if eq .Values.postgres.mode "cnpg" }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Values.postgres.cnpg.clusterName }}-pdb
+  namespace: {{ include "pm.namespace" . }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      cnpg.io/cluster: {{ .Values.postgres.cnpg.clusterName }}
+{{- end }}

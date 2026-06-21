@@ -1,0 +1,17 @@
+{{- if and (eq .Values.postgres.mode "cnpg") .Values.postgres.cnpg.backup.enabled }}
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ .Values.postgres.cnpg.clusterName }}-daily
+  namespace: {{ include "pm.namespace" . }}
+spec:
+  schedule: {{ .Values.postgres.cnpg.backup.schedule | quote }}
+  backupOwnerReference: self
+  cluster:
+    name: {{ .Values.postgres.cnpg.clusterName }}
+  method: plugin
+  pluginConfiguration:
+    name: {{ .Values.postgres.cnpg.backup.pluginName }}
+  immediate: true
+  suspend: false
+{{- end }}
