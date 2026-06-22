@@ -53,7 +53,7 @@ postgres:
 backend:
   image:
     repository: pm-backend
-    tag: "3.1-flyway"
+    tag: "3.2-auth"
   replicas: 2
   serverPort: 3000
   service:
@@ -70,11 +70,16 @@ backend:
   roomTtl:
     lobbySeconds: 180
     inGameSeconds: 600
+  jwt:
+    secretName: backend-secrets
+    expiryHours: 24
+  ws:
+    subscribeTimeoutSeconds: 10
 
 frontend:
   image:
     repository: pm-frontend
-    tag: "1.0"
+    tag: "1.1-auth"
   replicas: 2
   service:
     port: 80

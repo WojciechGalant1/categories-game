@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, setNick, getNick, setPlayerId } from "../services/api";
+import { api, setNick, getNick, saveSession } from "../services/api";
 
 const Home = () => {
     const navigate = useNavigate();
@@ -29,7 +29,7 @@ const Home = () => {
         try {
             const res = await api.createRoom(nick, isPublic);
             if (res.error) throw new Error(res.error);
-            setPlayerId(res.code, res.playerId);
+            saveSession(res.code, res.playerId, res.accessToken);
             navigate(`/room?code=${res.code}`);
         } catch (err: any) {
             alert(err.message);
@@ -43,7 +43,7 @@ const Home = () => {
         try {
             const res = await api.joinRoom(codeToJoin, nick);
             if (res.error) throw new Error(res.error);
-            setPlayerId(res.code, res.playerId);
+            saveSession(res.code, res.playerId, res.accessToken);
             navigate(`/room?code=${res.code}`);
         } catch (err: any) {
             alert(err.message);

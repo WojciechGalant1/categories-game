@@ -34,9 +34,20 @@ info:
     Brownfield upgrade: set `FLYWAY_BASELINE_ON_MIGRATE=true` once (Helm `postgres.flyway.baselineOnMigrate`).
     Production backups use the Barman Cloud plugin (`ObjectStore` + `ScheduledBackup`).
 
+    ## Authentication (JWT player session, no accounts)
+    Create/join endpoints issue a **Bearer JWT** (`accessToken` in `JoinResponse`) binding
+    `playerId`, `roomCode`, and `nick`. Protected REST endpoints require
+    `Authorization: Bearer <token>`. Host authorization is verified against PostgreSQL
+    (`is_host` in `players`), not only the JWT `host` claim (UI hint only).
+
+    **Rejoin:** `POST /rooms/{code}/join` with `{ nick }` — existing player in any phase
+    gets a new token; new nick allowed only in `lobby`.
+
+    K8s probes use `GET /api/health` (public).
+
     ## Real-time updates (WebSocket)
     Room state is pushed to clients over a **one-way WebSocket** at `/api/ws/rooms/{code}`.
-    After connecting, the client sends `{ "type": "subscribe", "playerId": "<uuid>" }`.
+    After connecting, the client sends `{ "type": "subscribe", "token": "<jwt>" }`.
     The server validates membership and pushes `{ "type": "room_state", "data": { ...Room... } }`
     on every change. Heartbeat: client sends `{ "type": "ping" }` every 30s → `{ "type": "pong" }`.
 
@@ -44,7 +55,7 @@ info:
     publishes the room code to **Redis Pub/Sub** (`room:updates`); every backend replica broadcasts
     the fresh room state to its local WebSocket sessions — required for HPA (2–10 replicas).
 
-    `GET /api/rooms/{code}` is kept as a **fallback** (reconnect, debug, K8s probes).
+    `GET /api/rooms/{code}` requires a member token (REST fallback for reconnect).
 
     ## Room cleanup (Redis TTL)
     When the cluster-wide WebSocket counter (`room:ws:count:{code}`) drops to 0, Redis sets
@@ -575,6 +586,13 @@ paths:
           $ref: '#/components/responses/InternalServerError'
 
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Player session JWT from create/join (`accessToken`)
+
   parameters:
     RoomCode:
       name: code
@@ -726,6 +744,9 @@ components:
           format: uuid
           description: UUID assigned to the player
           example: "550e8400-e29b-41d4-a716-446655440000"
+        accessToken:
+          type: string
+          description: Bearer JWT for subsequent REST calls and WebSocket subscribe
 
     PublicRoom:
       type: object

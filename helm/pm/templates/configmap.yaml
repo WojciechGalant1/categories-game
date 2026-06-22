@@ -8,6 +8,8 @@ data:
   SPRING_DATASOURCE_URL: {{ include "pm.postgres.jdbcUrl" . | quote }}
   SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: {{ .Values.backend.hikari.maximumPoolSize | quote }}
   FLYWAY_BASELINE_ON_MIGRATE: {{ .Values.postgres.flyway.baselineOnMigrate | quote }}
+  JWT_EXPIRY_HOURS: {{ .Values.backend.jwt.expiryHours | quote }}
+  WS_SUBSCRIBE_TIMEOUT_SECONDS: {{ .Values.backend.ws.subscribeTimeoutSeconds | quote }}
   {{- if .Values.redis.enabled }}
   SPRING_DATA_REDIS_HOST: {{ .Values.redis.host | quote }}
   SPRING_DATA_REDIS_PORT: {{ .Values.redis.port | quote }}

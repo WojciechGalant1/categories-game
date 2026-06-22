@@ -36,9 +36,14 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.postgres.credentialsSecret }}
                   key: {{ include "pm.postgres.secretPasswordKey" . }}
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.backend.jwt.secretName }}
+                  key: JWT_SECRET
           readinessProbe:
             httpGet:
-              path: /api/rooms
+              path: /api/health
               port: {{ .Values.backend.serverPort }}
             initialDelaySeconds: 25
             periodSeconds: 5
@@ -46,7 +51,7 @@ spec:
             failureThreshold: 12
           livenessProbe:
             httpGet:
-              path: /api/rooms
+              path: /api/health
               port: {{ .Values.backend.serverPort }}
             initialDelaySeconds: 60
             periodSeconds: 15

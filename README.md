@@ -276,6 +276,31 @@ Najważniejsze endpointy:
 - `WS /api/ws/rooms/:code` - push stanu pokoju (subscribe + ping/pong)
 - `POST /api/rooms/:code/settings` / `/start` / `/stop` / `/answers` / `/vote` / `/next-round` / `/reset` / `/leave`
 
+## Uwierzytelnianie (JWT, bez konta)
+
+Przy **create/join** backend zwraca `accessToken` (JWT). Klient wysyła `Authorization: Bearer <token>` na chronionych endpointach i `{ type: "subscribe", token }` w WebSocket.
+
+| Endpoint | Auth |
+|----------|------|
+| `GET /api/health` | publiczny (probe K8s) |
+| `GET /api/rooms`, `POST /api/rooms`, `POST .../join` | publiczny (wydaje token) |
+| Reszta REST + `GET /api/rooms/:code` | Bearer JWT |
+| WebSocket subscribe | token w pierwszej wiadomości |
+
+**Rejoin:** nick + kod pokoju → nowy token (istniejący gracz, dowolna faza gry). Nowy nick tylko w lobby.
+
+**Host:** autoryzacja z DB (`is_host`), nie tylko claim JWT.
+
+Secret (jednorazowo):
+
+```bash
+kubectl create secret generic backend-secrets \
+  --from-literal=JWT_SECRET=$(openssl rand -base64 64) \
+  -n pm-app --dry-run=client -o yaml | kubectl apply -f -
+```
+
+Deploy auth wymaga **atomowego** rebuild backend + frontend (`3.2-auth` / `1.1-auth`).
+
 ## PostgreSQL (CloudNativePG)
 
 Baza działa jako **CloudNativePG `Cluster`** (`pm-postgres`, 3 instancje = quorum). Backend łączy się przez serwis **`pm-postgres-rw`**. PDB (`maxUnavailable: 1`) chroni przed jednoczesnym evictem wielu instancji przy `kubectl drain`.

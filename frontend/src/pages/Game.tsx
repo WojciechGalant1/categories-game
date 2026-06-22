@@ -1,5 +1,4 @@
 import { useSearchParams } from "react-router-dom";
-import { getPlayerId } from "../services/api";
 import { useRoomWebSocket } from "../hooks/useRoomWebSocket";
 import { GameHeader } from "../components/game/GameHeader";
 import { AnswerForm } from "../components/game/AnswerForm";
@@ -10,10 +9,12 @@ import { LeaveRoomButton } from "../components/room/LeaveRoomButton";
 const Game = () => {
     const [searchParams] = useSearchParams();
     const roomCode = searchParams.get("code") || "";
-    const playerId = getPlayerId(roomCode);
 
     const {
         room,
+        playerId,
+        isHost,
+        sessionReady,
         answers,
         displayTimeLeft,
         handleAnswerChange,
@@ -22,18 +23,17 @@ const Game = () => {
         handleVote,
         handleReset,
         handleLeaveRoom,
-    } = useRoomWebSocket(roomCode, playerId);
+    } = useRoomWebSocket(roomCode);
 
-    if (!room) return <div className="pt-32 text-center text-white">Ładowanie gry...</div>;
+    if (!sessionReady || !room || !playerId) {
+        return <div className="pt-32 text-center text-white">Ładowanie gry...</div>;
+    }
 
     const phase = room.status;
     const currentLetter = room.game.currentLetter;
     const categories = room.settings.categories || [];
     const isReviewing = phase === 'reviewing';
     const isFinished = phase === 'finished';
-    
-    const me = room.players.find((p: any) => p.id === playerId);
-    const isHost = me?.isHost;
 
     return (
         <div className="pt-24 pb-24 min-h-screen flex flex-col items-center px-4 relative">

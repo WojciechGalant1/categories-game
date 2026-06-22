@@ -1,25 +1,14 @@
 package com.example.panstwamiasta.dto;
 
 import java.util.Map;
-import java.util.UUID;
 
 public class SubmitAnswersRequest {
-    private UUID playerId;
-    private Map<String, String> answers; // category -> answer
+    private Map<String, String> answers;
 
     public SubmitAnswersRequest() {}
 
-    public SubmitAnswersRequest(UUID playerId, Map<String, String> answers) {
-        this.playerId = playerId;
+    public SubmitAnswersRequest(Map<String, String> answers) {
         this.answers = answers;
-    }
-
-    public UUID getPlayerId() {
-        return playerId;
-    }
-
-    public void setPlayerId(UUID playerId) {
-        this.playerId = playerId;
     }
 
     public Map<String, String> getAnswers() {

@@ -1,6 +1,10 @@
 package com.example.panstwamiasta.websocket;
 
-import com.example.panstwamiasta.model.Player;
+import com.example.panstwamiasta.auth.InvalidPlayerTokenException;
+import com.example.panstwamiasta.auth.PlayerPrincipal;
+import com.example.panstwamiasta.auth.PlayerSessionTokenService;
+import com.example.panstwamiasta.auth.WebSocketProperties;
+import com.example.panstwamiasta.repository.PlayerRepository;
 import com.example.panstwamiasta.room.Room;
 import com.example.panstwamiasta.service.RoomBroadcastService;
 import com.example.panstwamiasta.service.RoomConnectionCounterService;
@@ -9,13 +13,15 @@ import com.example.panstwamiasta.service.RoomTtlService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
-import java.util.UUID;
+import java.io.IOException;
+import java.time.Instant;
 
 @Component
 public class RoomWebSocketHandler extends TextWebSocketHandler {
@@ -39,6 +45,31 @@ public class RoomWebSocketHandler extends TextWebSocketHandler {
 
     @Autowired
     private ObjectMapper objectMapper;
+
+    @Autowired
+    private PlayerSessionTokenService tokenService;
+
+    @Autowired
+    private PlayerRepository playerRepository;
+
+    @Autowired
+    private WebSocketProperties webSocketProperties;
+
+    @Autowired
+    private TaskScheduler taskScheduler;
+
+    @Override
+    public void afterConnectionEstablished(WebSocketSession session) {
+        taskScheduler.schedule(() -> {
+            if (!Boolean.TRUE.equals(session.getAttributes().get("subscribed")) && session.isOpen()) {
+                try {
+                    session.close(CloseStatus.POLICY_VIOLATION);
+                } catch (IOException ignored) {
+                    // connection already closed
+                }
+            }
+        }, Instant.now().plusSeconds(webSocketProperties.getSubscribeTimeoutSeconds()));
+    }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
@@ -81,31 +112,33 @@ public class RoomWebSocketHandler extends TextWebSocketHandler {
                 return;
             }
 
-            String playerIdStr = node.path("playerId").asText(null);
-            if (playerIdStr == null || playerIdStr.isBlank()) {
-                broadcastService.sendToSession(session, "error", "playerId required");
+            String token = node.path("token").asText(null);
+            if (token == null || token.isBlank()) {
+                broadcastService.sendToSession(session, "error", "token required");
                 return;
             }
 
-            UUID playerId;
+            PlayerPrincipal principal;
             try {
-                playerId = UUID.fromString(playerIdStr);
-            } catch (IllegalArgumentException e) {
-                broadcastService.sendToSession(session, "error", "Invalid playerId");
+                principal = tokenService.parseToken(token);
+            } catch (InvalidPlayerTokenException e) {
+                broadcastService.sendToSession(session, "error", e.getMessage());
+                return;
+            }
+
+            if (!principal.roomCode().equals(roomCode)) {
+                broadcastService.sendToSession(session, "error", "Token room mismatch");
+                return;
+            }
+
+            if (!playerRepository.isPlayerInRoom(roomCode, principal.playerId())) {
+                broadcastService.sendToSession(session, "error", "Player not in room");
                 return;
             }
 
             Room room = roomService.getRoom(roomCode);
             if (room == null) {
                 broadcastService.sendToSession(session, "error", "Room not found");
-                return;
-            }
-
-            boolean inRoom = room.getPlayers().stream()
-                    .map(Player::getId)
-                    .anyMatch(id -> id.equals(playerId));
-            if (!inRoom) {
-                broadcastService.sendToSession(session, "error", "Player not in room");
                 return;
             }
 

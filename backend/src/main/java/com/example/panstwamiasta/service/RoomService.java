@@ -1,5 +1,6 @@
 package com.example.panstwamiasta.service;
 
+import com.example.panstwamiasta.auth.PlayerSessionTokenService;
 import com.example.panstwamiasta.dto.*;
 import com.example.panstwamiasta.model.GameState;
 import com.example.panstwamiasta.model.Player;
@@ -27,6 +28,9 @@ public class RoomService {
 
     @Autowired
     private RoomTtlService roomTtlService;
+
+    @Autowired
+    private PlayerSessionTokenService tokenService;
 
     private final Random random = new Random();
 
@@ -87,7 +91,12 @@ public class RoomService {
         host.setRoomCode(code);
         room = saveAndNotify(room);
 
-        return new JoinResponse(code, playerId);
+        return toJoinResponse(code, host);
+    }
+
+    private JoinResponse toJoinResponse(String code, Player player) {
+        String token = tokenService.issueToken(player.getId(), code, player.getNick(), player.isHost());
+        return new JoinResponse(code, player.getId(), token);
     }
 
     // List public rooms
@@ -132,27 +141,27 @@ public class RoomService {
         return room;
     }
 
-    // Join room
+    // Join or rejoin room
     @Transactional
     public JoinResponse joinRoom(String code, JoinRoomRequest request) {
         Room room = roomRepository.findById(code).orElse(null);
         if (room == null) {
             throw new RuntimeException("Room not found");
         }
-        if (room.getStatus() != Room.RoomStatus.lobby) {
-            throw new RuntimeException("Game already started");
-        }
-        if (room.getPlayers().size() >= room.getSettings().getMaxPlayers()) {
-            throw new RuntimeException("Room is full");
-        }
 
-        // Check if nick already exists
         Optional<Player> existingPlayer = room.getPlayers().stream()
             .filter(p -> p.getNick().equals(request.getNick()))
             .findFirst();
 
         if (existingPlayer.isPresent()) {
-            return new JoinResponse(code, existingPlayer.get().getId());
+            return toJoinResponse(code, existingPlayer.get());
+        }
+
+        if (room.getStatus() != Room.RoomStatus.lobby) {
+            throw new RuntimeException("Game already started");
+        }
+        if (room.getPlayers().size() >= room.getSettings().getMaxPlayers()) {
+            throw new RuntimeException("Room is full");
         }
 
         UUID playerId = UUID.randomUUID();
@@ -161,24 +170,18 @@ public class RoomService {
         room.getPlayers().add(newPlayer);
         saveAndNotify(room);
 
-        return new JoinResponse(code, playerId);
+        return toJoinResponse(code, newPlayer);
     }
 
     // Update settings
     @Transactional
-    public void updateSettings(String code, UpdateSettingsRequest request) {
+    public void updateSettings(String code, UUID playerId, UpdateSettingsRequest request) {
         Room room = roomRepository.findById(code).orElse(null);
         if (room == null) {
             throw new RuntimeException("Room not found");
         }
         if (room.getStatus() != Room.RoomStatus.lobby) {
             throw new RuntimeException("Cannot change settings (game not in lobby)");
-        }
-        Player host = room.getPlayers().stream()
-            .filter(Player::isHost)
-            .findFirst().orElse(null);
-        if (host == null || !host.getId().equals(request.getPlayerId())) {
-            throw new RuntimeException("Only host can change settings");
         }
 
         RoomSettings newSettings = request.getSettings();
@@ -199,19 +202,13 @@ public class RoomService {
 
     // Start game
     @Transactional
-    public void startGame(String code, PlayerIdRequest request) {
+    public void startGame(String code, UUID playerId) {
         Room room = roomRepository.findById(code).orElse(null);
         if (room == null) {
             throw new RuntimeException("Room not found");
         }
         if (room.getStatus() != Room.RoomStatus.lobby && room.getStatus() != Room.RoomStatus.reviewing) {
             throw new RuntimeException("Cannot start game (wrong status)");
-        }
-        Player host = room.getPlayers().stream()
-            .filter(Player::isHost)
-            .findFirst().orElse(null);
-        if (host == null || !host.getId().equals(request.getPlayerId())) {
-            throw new RuntimeException("Only host can start game");
         }
 
         // Reset scores if first round
@@ -240,7 +237,7 @@ public class RoomService {
 
     // Trigger stop
     @Transactional
-    public void triggerStop(String code, PlayerIdRequest request) {
+    public void triggerStop(String code, UUID playerId) {
         Room room = roomRepository.findById(code).orElse(null);
         if (room == null) {
             throw new RuntimeException("Room not found");
@@ -249,13 +246,13 @@ public class RoomService {
             throw new RuntimeException("Not in playing phase");
         }
         Player player = room.getPlayers().stream()
-            .filter(p -> p.getId().equals(request.getPlayerId()))
+            .filter(p -> p.getId().equals(playerId))
             .findFirst().orElse(null);
         if (player == null) {
             throw new RuntimeException("Player not in room");
         }
 
-        String playerIdStr = request.getPlayerId().toString();
+        String playerIdStr = playerId.toString();
         if (!room.getGame().getStoppedPlayers().contains(playerIdStr)) {
             room.getGame().getStoppedPlayers().add(playerIdStr);
         }
@@ -269,26 +266,25 @@ public class RoomService {
 
     // Submit answers
     @Transactional
-    public void submitAnswers(String code, SubmitAnswersRequest request) {
+    public void submitAnswers(String code, UUID playerId, SubmitAnswersRequest request) {
         Room room = roomRepository.findById(code).orElse(null);
         if (room == null) {
             throw new RuntimeException("Room not found");
         }
-        // Can submit even if stopped, I think
         Player player = room.getPlayers().stream()
-            .filter(p -> p.getId().equals(request.getPlayerId()))
+            .filter(p -> p.getId().equals(playerId))
             .findFirst().orElse(null);
         if (player == null) {
             throw new RuntimeException("Player not in room");
         }
 
-        room.getGame().getAnswers().put(request.getPlayerId().toString(), request.getAnswers());
+        room.getGame().getAnswers().put(playerId.toString(), request.getAnswers());
         saveAndNotify(room);
     }
 
     // Submit vote
     @Transactional
-    public void submitVote(String code, SubmitVoteRequest request) {
+    public void submitVote(String code, UUID voterId, SubmitVoteRequest request) {
         Room room = roomRepository.findById(code).orElse(null);
         if (room == null) {
             throw new RuntimeException("Room not found");
@@ -297,38 +293,32 @@ public class RoomService {
             throw new RuntimeException("Not in reviewing phase");
         }
         Player voter = room.getPlayers().stream()
-            .filter(p -> p.getId().equals(request.getVoterId()))
+            .filter(p -> p.getId().equals(voterId))
             .findFirst().orElse(null);
         if (voter == null) {
             throw new RuntimeException("Voter not in room");
         }
 
         String targetId = request.getTargetPlayerId().toString();
-        String voterId = request.getVoterId().toString();
+        String voterIdStr = voterId.toString();
         String category = request.getCategory();
 
         room.getGame().getVotes()
             .computeIfAbsent(targetId, k -> new HashMap<>())
             .computeIfAbsent(category, k -> new HashMap<>())
-            .put(voterId, request.isValid());
+            .put(voterIdStr, request.isValid());
         saveAndNotify(room);
     }
 
     // Next round
     @Transactional
-    public void nextRound(String code, PlayerIdRequest request) {
+    public void nextRound(String code, UUID playerId) {
         Room room = roomRepository.findById(code).orElse(null);
         if (room == null) {
             throw new RuntimeException("Room not found");
         }
         if (room.getStatus() != Room.RoomStatus.reviewing) {
             throw new RuntimeException("Not in reviewing phase");
-        }
-        Player host = room.getPlayers().stream()
-            .filter(Player::isHost)
-            .findFirst().orElse(null);
-        if (host == null || !host.getId().equals(request.getPlayerId())) {
-            throw new RuntimeException("Only host can end the round");
         }
 
         // Calculate scores
@@ -339,9 +329,8 @@ public class RoomService {
             room.getGame().setRoundEndsAt(null);
             saveAndNotify(room);
         } else {
-            // Start next round
             saveAndNotify(room);
-            startGame(code, request);
+            startGame(code, playerId);
         }
     }
 
@@ -427,16 +416,10 @@ public class RoomService {
 
     // Reset to lobby
     @Transactional
-    public void resetToLobby(String code, PlayerIdRequest request) {
+    public void resetToLobby(String code, UUID playerId) {
         Room room = roomRepository.findById(code).orElse(null);
         if (room == null) {
             throw new RuntimeException("Room not found");
-        }
-        Player host = room.getPlayers().stream()
-            .filter(Player::isHost)
-            .findFirst().orElse(null);
-        if (host == null || !host.getId().equals(request.getPlayerId())) {
-            throw new RuntimeException("Only host can reset");
         }
 
         room.setStatus(Room.RoomStatus.lobby);
@@ -453,13 +436,12 @@ public class RoomService {
 
     // Leave room (any phase)
     @Transactional
-    public void leaveRoom(String code, PlayerIdRequest request) {
+    public void leaveRoom(String code, UUID playerId) {
         Room room = roomRepository.findById(code).orElse(null);
         if (room == null) {
             throw new RuntimeException("Room not found");
         }
 
-        UUID playerId = request.getPlayerId();
         Player leaving = room.getPlayers().stream()
                 .filter(p -> p.getId().equals(playerId))
                 .findFirst()

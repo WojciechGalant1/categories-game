@@ -1,11 +1,14 @@
 package com.example.panstwamiasta.controller;
 
+import com.example.panstwamiasta.auth.PlayerPrincipal;
 import com.example.panstwamiasta.dto.*;
 import com.example.panstwamiasta.room.Room;
 import com.example.panstwamiasta.service.RoomService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -36,6 +39,7 @@ public class RoomController {
     }
 
     @GetMapping("/rooms/{code}")
+    @PreAuthorize("@roomAuth.isMember(#code, authentication)")
     public ResponseEntity<?> getRoomState(@PathVariable String code) {
         Room room = roomService.getRoom(code);
         if (room == null) {
@@ -56,59 +60,66 @@ public class RoomController {
             if (e.getMessage().equals("Room not found")) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ApiError(e.getMessage()));
             }
+            if (e.getMessage().equals("Game already started")) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(new ApiError(e.getMessage()));
+            }
             return ResponseEntity.badRequest().body(new ApiError(e.getMessage()));
         }
     }
 
     @PostMapping("/rooms/{code}/settings")
-    public ResponseEntity<?> updateSettings(@PathVariable String code, @RequestBody UpdateSettingsRequest request) {
+    @PreAuthorize("@roomAuth.isHost(#code, authentication)")
+    public ResponseEntity<?> updateSettings(@PathVariable String code,
+                                            @AuthenticationPrincipal PlayerPrincipal principal,
+                                            @RequestBody UpdateSettingsRequest request) {
         try {
-            roomService.updateSettings(code, request);
+            roomService.updateSettings(code, principal.playerId(), request);
             return ResponseEntity.ok(new SuccessResponse(true));
         } catch (RuntimeException e) {
             if (e.getMessage().equals("Room not found")) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ApiError(e.getMessage()));
-            } else if (e.getMessage().equals("Only host can change settings")) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(new ApiError(e.getMessage()));
             }
             return ResponseEntity.badRequest().body(new ApiError(e.getMessage()));
         }
     }
 
     @PostMapping("/rooms/{code}/start")
-    public ResponseEntity<?> startGame(@PathVariable String code, @RequestBody PlayerIdRequest request) {
+    @PreAuthorize("@roomAuth.isHost(#code, authentication)")
+    public ResponseEntity<?> startGame(@PathVariable String code,
+                                       @AuthenticationPrincipal PlayerPrincipal principal) {
         try {
-            roomService.startGame(code, request);
+            roomService.startGame(code, principal.playerId());
             return ResponseEntity.ok(new SuccessResponse(true));
         } catch (RuntimeException e) {
             if (e.getMessage().equals("Room not found")) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ApiError(e.getMessage()));
-            } else if (e.getMessage().equals("Only host can start game")) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(new ApiError(e.getMessage()));
             }
             return ResponseEntity.badRequest().body(new ApiError(e.getMessage()));
         }
     }
 
     @PostMapping("/rooms/{code}/stop")
-    public ResponseEntity<?> triggerStop(@PathVariable String code, @RequestBody PlayerIdRequest request) {
+    @PreAuthorize("@roomAuth.isMember(#code, authentication)")
+    public ResponseEntity<?> triggerStop(@PathVariable String code,
+                                         @AuthenticationPrincipal PlayerPrincipal principal) {
         try {
-            roomService.triggerStop(code, request);
+            roomService.triggerStop(code, principal.playerId());
             return ResponseEntity.ok(new SuccessResponse(true));
         } catch (RuntimeException e) {
             if (e.getMessage().equals("Room not found")) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ApiError(e.getMessage()));
-            } else if (e.getMessage().equals("Player not in room")) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(new ApiError(e.getMessage()));
             }
             return ResponseEntity.badRequest().body(new ApiError(e.getMessage()));
         }
     }
 
     @PostMapping("/rooms/{code}/answers")
-    public ResponseEntity<?> submitAnswers(@PathVariable String code, @RequestBody SubmitAnswersRequest request) {
+    @PreAuthorize("@roomAuth.isMember(#code, authentication)")
+    public ResponseEntity<?> submitAnswers(@PathVariable String code,
+                                           @AuthenticationPrincipal PlayerPrincipal principal,
+                                           @RequestBody SubmitAnswersRequest request) {
         try {
-            roomService.submitAnswers(code, request);
+            roomService.submitAnswers(code, principal.playerId(), request);
             return ResponseEntity.ok(new SuccessResponse(true));
         } catch (RuntimeException e) {
             if (e.getMessage().equals("Room not found")) {
@@ -119,60 +130,61 @@ public class RoomController {
     }
 
     @PostMapping("/rooms/{code}/vote")
-    public ResponseEntity<?> submitVote(@PathVariable String code, @RequestBody SubmitVoteRequest request) {
+    @PreAuthorize("@roomAuth.isMember(#code, authentication)")
+    public ResponseEntity<?> submitVote(@PathVariable String code,
+                                        @AuthenticationPrincipal PlayerPrincipal principal,
+                                        @RequestBody SubmitVoteRequest request) {
         try {
-            roomService.submitVote(code, request);
+            roomService.submitVote(code, principal.playerId(), request);
             return ResponseEntity.ok(new SuccessResponse(true));
         } catch (RuntimeException e) {
             if (e.getMessage().equals("Room not found")) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ApiError(e.getMessage()));
-            } else if (e.getMessage().equals("Voter not in room")) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(new ApiError(e.getMessage()));
             }
             return ResponseEntity.badRequest().body(new ApiError(e.getMessage()));
         }
     }
 
     @PostMapping("/rooms/{code}/next-round")
-    public ResponseEntity<?> nextRound(@PathVariable String code, @RequestBody PlayerIdRequest request) {
+    @PreAuthorize("@roomAuth.isHost(#code, authentication)")
+    public ResponseEntity<?> nextRound(@PathVariable String code,
+                                       @AuthenticationPrincipal PlayerPrincipal principal) {
         try {
-            roomService.nextRound(code, request);
+            roomService.nextRound(code, principal.playerId());
             return ResponseEntity.ok(new SuccessResponse(true));
         } catch (RuntimeException e) {
             if (e.getMessage().equals("Room not found")) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ApiError(e.getMessage()));
-            } else if (e.getMessage().equals("Only host can end the round")) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(new ApiError(e.getMessage()));
             }
             return ResponseEntity.badRequest().body(new ApiError(e.getMessage()));
         }
     }
 
     @PostMapping("/rooms/{code}/leave")
-    public ResponseEntity<?> leaveRoom(@PathVariable String code, @RequestBody PlayerIdRequest request) {
+    @PreAuthorize("@roomAuth.isMember(#code, authentication)")
+    public ResponseEntity<?> leaveRoom(@PathVariable String code,
+                                       @AuthenticationPrincipal PlayerPrincipal principal) {
         try {
-            roomService.leaveRoom(code, request);
+            roomService.leaveRoom(code, principal.playerId());
             return ResponseEntity.ok(new SuccessResponse(true));
         } catch (RuntimeException e) {
             if (e.getMessage().equals("Room not found")) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ApiError(e.getMessage()));
-            } else if (e.getMessage().equals("Player not in room")) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(new ApiError(e.getMessage()));
             }
             return ResponseEntity.badRequest().body(new ApiError(e.getMessage()));
         }
     }
 
     @PostMapping("/rooms/{code}/reset")
-    public ResponseEntity<?> resetToLobby(@PathVariable String code, @RequestBody PlayerIdRequest request) {
+    @PreAuthorize("@roomAuth.isHost(#code, authentication)")
+    public ResponseEntity<?> resetToLobby(@PathVariable String code,
+                                          @AuthenticationPrincipal PlayerPrincipal principal) {
         try {
-            roomService.resetToLobby(code, request);
+            roomService.resetToLobby(code, principal.playerId());
             return ResponseEntity.ok(new SuccessResponse(true));
         } catch (RuntimeException e) {
             if (e.getMessage().equals("Room not found")) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ApiError(e.getMessage()));
-            } else if (e.getMessage().equals("Only host can reset")) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(new ApiError(e.getMessage()));
             }
             return ResponseEntity.badRequest().body(new ApiError(e.getMessage()));
         }
