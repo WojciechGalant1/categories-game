@@ -40,6 +40,21 @@ Namespace
 {{- end }}
 
 {{/*
+Image reference: registry + repository, digest ma priorytet nad tagiem.
+Wywołanie: include "pm.image" (dict "image" .Values.backend.image "registry" .Values.global.imageRegistry)
+*/}}
+{{- define "pm.image" -}}
+{{- $img := .image -}}
+{{- $repo := $img.repository -}}
+{{- with .registry }}{{- $repo = printf "%s/%s" (trimSuffix "/" .) $img.repository -}}{{- end }}
+{{- if $img.digest -}}
+{{- printf "%s@%s" $repo $img.digest -}}
+{{- else -}}
+{{- printf "%s:%s" $repo (toString $img.tag) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 PostgreSQL JDBC URL (legacy StatefulSet vs CloudNativePG)
 */}}
 {{- define "pm.postgres.jdbcUrl" -}}

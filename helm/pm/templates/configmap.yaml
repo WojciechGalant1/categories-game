@@ -10,7 +10,12 @@ data:
   FLYWAY_BASELINE_ON_MIGRATE: {{ .Values.postgres.flyway.baselineOnMigrate | quote }}
   JWT_EXPIRY_HOURS: {{ .Values.backend.jwt.expiryHours | quote }}
   WS_SUBSCRIBE_TIMEOUT_SECONDS: {{ .Values.backend.ws.subscribeTimeoutSeconds | quote }}
-  {{- if .Values.redis.enabled }}
+  {{- if .Values.redisHA.enabled }}
+  SPRING_DATA_REDIS_SENTINEL_MASTER: {{ .Values.redisHA.sentinel.masterSet | quote }}
+  SPRING_DATA_REDIS_SENTINEL_NODES: "{{ .Values.redisHA.fullnameOverride }}:26379"
+  APP_ROOM_TTL_LOBBY_SECONDS: {{ .Values.backend.roomTtl.lobbySeconds | quote }}
+  APP_ROOM_TTL_IN_GAME_SECONDS: {{ .Values.backend.roomTtl.inGameSeconds | quote }}
+  {{- else if .Values.redis.enabled }}
   SPRING_DATA_REDIS_HOST: {{ .Values.redis.host | quote }}
   SPRING_DATA_REDIS_PORT: {{ .Values.redis.port | quote }}
   APP_ROOM_TTL_LOBBY_SECONDS: {{ .Values.backend.roomTtl.lobbySeconds | quote }}

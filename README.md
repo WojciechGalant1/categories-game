@@ -1,6 +1,6 @@
 # Państwa Miasta
 
-Multiplayerowa gra słowna "Państwa Miasta" wdrożona na lokalnym klastrze Kubernetes z wykorzystaniem `minikube` i **Helm** (Lab 12).
+Multiplayerowa gra słowna "Państwa Miasta" wdrożona na lokalnym klastrze Kubernetes z wykorzystaniem `minikube` i **Helm**.
 
 ## Architektura
 
@@ -44,7 +44,7 @@ Stan pokoju (lobby + gra) synchronizowany jest przez **WebSocket** (`/api/ws/roo
 │   ├── src/
 │   ├── Dockerfile
 │   └── nginx.conf
-├── helm/pm/        # Helm chart (Lab 12)
+├── helm/pm/        # Helm chart
 │   ├── Chart.yaml
 │   ├── values.yaml
 │   ├── values-minikube.yaml
@@ -58,7 +58,7 @@ Stan pokoju (lobby + gra) synchronizowany jest przez **WebSocket** (`/api/ws/roo
 - `minikube` >= 1.38, `kubectl`, `helm` >= 3.x, Docker
 - Lokalnie do dev: JDK 21 + Maven (lub `./mvnw`), Node.js 18+ i npm dla frontendu
 
-Komendy Helm uruchamiaj z katalogu głównego projektu (`/home/wojtek/projekty/k8s`). Chart podawaj jako **`./helm/pm`** (z `./`) — inaczej Helm interpretuje `helm/pm` jako repozytorium `helm` i chart `pm` → błąd `repo helm not found`.
+Komendy Helm uruchamiaj z katalogu głównego projektu. Chart podawaj jako **`./helm/pm`** (z `./`) — inaczej Helm interpretuje `helm/pm` jako repozytorium `helm` i chart `pm` → błąd `repo helm not found`.
 
 ## Uruchomienie w minikube
 
@@ -83,8 +83,8 @@ Na minikube **nie** instaluj pluginu Barman — backupy włączane są tylko w p
 
 ```bash
 eval $(minikube -p minikube docker-env --shell bash)
-docker build -t pm-backend:3.0 backend/
-docker build -t pm-frontend:1.0 frontend/
+docker build -t pm-backend:3.1 backend/
+docker build -t pm-frontend:1.1 frontend/
 ```
 
 ### 4. Secret Postgres (poza chartem — hasła nie trafiają do git)
@@ -121,7 +121,7 @@ kubectl get all,hpa,ingress -n pm-app
 helm list -n pm-app
 ```
 
-Walidacja przed wdrożeniem (Lab 12):
+Walidacja przed wdrożeniem:
 
 ```bash
 helm lint ./helm/pm \
@@ -245,23 +245,26 @@ Parametry bazowe: [`helm/pm/values.yaml`](helm/pm/values.yaml). Override minikub
 | Rozmiar wolumenu Postgres   | `values.yaml` → `postgres.cnpg.storage`                                                     | 2Gi × 3, `storageClassName: standard`                  |
 | Liczba replik frontendu     | `values.yaml` → `frontend.replicas`                                                         | 2                                                      |
 | Liczba replik backendu      | `values.yaml` → `backend.replicas` + `hpa.*`                                                | min 2, max 10 (HPA: **tylko CPU** 70%)                 |
-| Obrazy Docker               | `values.yaml` → `backend.image`, `frontend.image`                                           | `pm-backend:3.0`, `pm-frontend:1.0`                    |
+| Obrazy Docker               | `values.yaml` → `backend.image`, `frontend.image`                                           | `pm-backend:3.2-auth`, `pm-frontend:1.1-auth`         |
+| Rejestr / digest / pull     | `values.yaml` → `global.appImageRegistry`, `image.digest`, `global.imagePullSecrets`        | puste (dev lokalny); prod: GHCR + `@sha256` + `ghcr-pull` |
 | imagePullPolicy (minikube)  | `values-minikube.yaml` → `global.imagePullPolicy`                                           | `Never`                                                |
 | Routing / host              | `values.yaml` → `ingress.host`                                                             | `pm.local`, `/api` → backend, `/` → frontend           |
+| TLS / HTTPS                 | `values.yaml` → `ingress.tls.*` (prod: `values-prod.yaml`)                                  | wyłączone (dev HTTP); prod: cert-manager + `letsencrypt-prod` |
+| Redis                       | `values.yaml` → `redis.*` (dev) / `redisHA.*` (prod, Bitnami Sentinel)                       | dev: pojedynczy `redis:7-alpine`; prod: HA Sentinel (3 węzły) |
 
-## Helm (Lab 12)
+## Helm 
 
 Chart [`helm/pm/`](helm/pm/) pakuje wszystkie zasoby Kubernetes aplikacji:
 
 - **Chart.yaml** — metadane chartu (`name: pm`, `version: 0.1.0`)
 - **values.yaml** — domyślne wartości (bez haseł; tylko `postgres.credentialsSecret`)
 - **values-minikube.yaml** — override minikube: `imagePullPolicy: Never`, `namespace.create: false`
-- **values-prod.yaml** — prod: Barman backup, `primaryUpdateStrategy: supervised`, wyższe resources
+- **values-prod.yaml** — prod: Barman backup, `primaryUpdateStrategy: supervised`, wyższe resources, TLS (cert-manager)
 - **templates/** — szablony Go Template generujące manifesty
 
 Secret Postgres **nie jest** w repozytorium — tworzony ręcznie przed wdrożeniem. Opcjonalnie `postgres.credentials.create: true` + `--set postgres.credentials.user=... --set postgres.credentials.password=...` tylko na lokalny dev (nie commitować haseł).
 
-Walidacja chartu (Lab 12): `helm lint`, `helm template`, `helm upgrade --install --dry-run`.
+Walidacja chartu: `helm lint`, `helm template`, `helm upgrade --install --dry-run`.
 
 ## API
 
@@ -300,6 +303,153 @@ kubectl create secret generic backend-secrets \
 ```
 
 Deploy auth wymaga **atomowego** rebuild backend + frontend (`3.2-auth` / `1.1-auth`).
+
+## TLS / HTTPS (produkcja)
+
+Na produkcji Ingress terminuje TLS, a certyfikat wystawia **cert-manager** (Let's Encrypt, HTTP-01). Lokalny dev (`values-minikube.yaml`) zostaje na czystym HTTP (`tls.enabled: false`).
+
+Włączenie sterowane wartościami `ingress.tls.*` (zob. [`helm/pm/values.yaml`](helm/pm/values.yaml), prod: [`helm/pm/values-prod.yaml`](helm/pm/values-prod.yaml)):
+
+| Klucz | Opis |
+|-------|------|
+| `ingress.tls.enabled` | dodaje blok `spec.tls`, annotację `cert-manager.io/cluster-issuer` i `ssl-redirect` |
+| `ingress.tls.secretName` | nazwa Secreta na certyfikat (tworzony przez cert-manager), domyślnie `pm-tls` |
+| `ingress.tls.clusterIssuer` | nazwa `ClusterIssuer`, np. `letsencrypt-prod` |
+| `ingress.tls.sslRedirect` | wymuszenie HTTP → HTTPS (`true`) |
+
+### 1. Instalacja cert-manager (jednorazowo)
+
+```bash
+helm repo add jetstack https://charts.jetstack.io
+helm repo update
+helm install cert-manager jetstack/cert-manager \
+  -n cert-manager --create-namespace --set crds.enabled=true
+kubectl get pods -n cert-manager
+```
+
+### 2. ClusterIssuery
+
+Przykładowe manifesty (poza chartem) w [`infra/cert-manager/`](infra/cert-manager/). Podmień `email` na właściwy adres, potem zaaplikuj. Najpierw **staging** (test bez ostrych rate-limitów), po sukcesie **prod**:
+
+```bash
+kubectl apply -f infra/cert-manager/clusterissuer-staging.yaml
+kubectl apply -f infra/cert-manager/clusterissuer-prod.yaml
+kubectl get clusterissuer
+```
+
+### 3. DNS + deploy prod
+
+Ustaw rekord A domeny (`ingress.host`, domyślnie placeholder `pm.example.com`) na IP `ingress-nginx-controller`:
+
+```bash
+kubectl get svc -n ingress-nginx ingress-nginx-controller
+helm upgrade --install pm ./helm/pm -n pm-app \
+  -f helm/pm/values.yaml -f helm/pm/values-prod.yaml
+```
+
+cert-manager automatycznie wykryje annotację na Ingressie, przeprowadzi challenge HTTP-01 i zapisze certyfikat do Secreta `pm-tls`.
+
+### 4. Weryfikacja
+
+```bash
+kubectl get certificate -n pm-app
+curl -I https://pm.example.com/api/health    # 200; http -> 308 redirect na https
+```
+
+### Debugowanie certyfikatu
+
+Najczęstszy problem przy Let's Encrypt: challenge wisi w `pending`, bo DNS nie wskazuje na IP Ingressu.
+
+```bash
+kubectl get certificate -n pm-app
+kubectl describe certificate pm-tls -n pm-app
+# Challenge HTTP-01
+kubectl get challenge -n pm-app
+# Challenge w "pending" => sprawdź DNS i IP Ingressu
+nslookup pm.example.com
+kubectl get svc -n ingress-nginx ingress-nginx-controller
+```
+
+## Container registry (produkcja)
+
+Lokalny dev (minikube) buduje obrazy w demonie Dockera klastra (`imagePullPolicy: Never`, pusty `global.appImageRegistry`). Na produkcji obrazy backend/frontend pochodzą z prywatnego rejestru (przykład: GHCR), są **pinowane po digest** (`@sha256:...`) i pobierane przez `imagePullSecrets`. Konfiguracja w [`helm/pm/values-prod.yaml`](helm/pm/values-prod.yaml):
+
+| Klucz | Opis |
+|-------|------|
+| `global.appImageRegistry` | prefiks rejestru obrazów aplikacji, np. `ghcr.io/OWNER` (puste = obraz lokalny) |
+| `backend.image.digest` / `frontend.image.digest` | `sha256:...`; ustawiony ma priorytet nad `tag` |
+| `global.imagePullSecrets` | lista nazw Secretów typu `docker-registry` |
+
+### 1. Build + push do GHCR
+
+```bash
+docker build -t ghcr.io/OWNER/pm-backend:3.2-auth backend/
+docker build -t ghcr.io/OWNER/pm-frontend:1.1-auth frontend/
+docker push ghcr.io/OWNER/pm-backend:3.2-auth
+docker push ghcr.io/OWNER/pm-frontend:1.1-auth
+```
+
+### 2. Pobranie digestu (do `values-prod.yaml`)
+
+```bash
+docker buildx imagetools inspect ghcr.io/OWNER/pm-backend:3.2-auth \
+  --format '{{ "{{json .Manifest.Digest}}" }}'
+# wynik: "sha256:..." -> wpisz jako backend.image.digest (repository zostaje pm-backend)
+```
+
+### 3. imagePullSecret (jednorazowo)
+
+```bash
+kubectl create secret docker-registry ghcr-pull \
+  --docker-server=ghcr.io \
+  --docker-username=GH_USER \
+  --docker-password=GH_TOKEN \
+  -n pm-app
+```
+
+Następnie deploy: `helm upgrade --install pm ./helm/pm -n pm-app -f helm/pm/values.yaml -f helm/pm/values-prod.yaml`.
+
+## Redis HA (produkcja)
+
+Dev używa pojedynczego `redis:7-alpine` (`redis.enabled: true`). Produkcja używa subchartu **Bitnami Redis** w trybie replication + **Sentinel** (`redisHA.enabled: true`, `redis.enabled: false` w [`values-prod.yaml`](helm/pm/values-prod.yaml)): 3 węzły (1 master + 2 repliki), automatyczny failover, AOF persistence, PDB i auth. Tryby wykluczają się wzajemnie.
+
+Backend łączy się przez Sentinel wyłącznie konfiguracją (`spring.data.redis.sentinel.*` ze zmiennych env) — Lettuce jest już w zależnościach, więc **bez zmian w kodzie i bez rebuildu**. Zachowane: Pub/Sub `room:updates`, keyspace `__keyevent@0__:expired` (`notify-keyspace-events Ex` w `commonConfiguration`), Lua/liczniki (zapisy routowane na master).
+
+| Klucz | Opis |
+|-------|------|
+| `redisHA.sentinel.masterSet` | nazwa zbioru mastera (`mymaster`) |
+| `redisHA.sentinel.quorum` | quorum Sentinela (`2`) |
+| `redisHA.replica.replicaCount` | liczba węzłów (`3`) |
+| `redisHA.replica.persistence` / `master.persistence` | AOF PVC (`1Gi`, `storageClass: standard`) |
+| `redisHA.replica.pdb` | PodDisruptionBudget (`maxUnavailable: 1`) |
+| `redisHA.auth.existingSecret` | sekret z hasłem (`redis-credentials`, klucz `redis-password`) |
+
+### 1. Sekret z hasłem (jednorazowo)
+
+```bash
+kubectl create secret generic redis-credentials \
+  --from-literal=redis-password=$(openssl rand -base64 24) \
+  -n pm-app --dry-run=client -o yaml | kubectl apply -f -
+```
+
+### 2. Pobranie subchartu i deploy
+
+```bash
+helm dependency build helm/pm          # pobiera Bitnami redis do helm/pm/charts/
+helm upgrade --install pm ./helm/pm -n pm-app \
+  -f helm/pm/values.yaml -f helm/pm/values-prod.yaml
+kubectl get statefulset,pdb,svc -n pm-app -l app.kubernetes.io/name=redis
+```
+
+### 3. Test failover
+
+```bash
+# usuń pod-mastera; Sentinel wypromuje replikę, backend reconnectuje przez Sentinel
+kubectl delete pod pm-redis-node-0 -n pm-app
+kubectl logs -n pm-app deploy/backend -f | grep -i "sentinel\|master"
+```
+
+> Uwaga o obrazach Bitnami: od 2025 część publicznych obrazów Bitnami przeniesiono (model "Bitnami Secure Images"). Jeśli pull `bitnami/redis` zawiedzie, nadpisz `redisHA.image.registry`/`redisHA.image.repository` (np. `bitnamilegacy`) lub własny mirror.
 
 ## PostgreSQL (CloudNativePG)
 
@@ -390,7 +540,7 @@ WHERE code = :code AND status = 'playing' AND round_ends_at <= :now
 
 Dzięki temu backend można skalować (HPA 2–10 replik). Po każdej mutacji REST backend publikuje kod pokoju do **Redis Pub/Sub** (`room:updates`); każda replika pushuje świeży stan do swoich klientów WS. `mainTimeLeft` liczone dynamicznie przy pushu; frontend odlicza lokalnie między pushami.
 
-**Redis** — 1 replika wystarczy na lab; restart Redisa zrywa subskrypcje Pub/Sub (klienci WS reconnectują). W prod rozważ Redis Sentinel / ElastiCache.
+**Redis** — dev: 1 replika (`redis.enabled`) wystarczy na lab; restart Redisa zrywa subskrypcje Pub/Sub (klienci WS reconnectują). Prod: HA z Sentinelem (zob. sekcja [Redis HA](#redis-ha-produkcja)).
 
 ### Cleanup pokoi (TTL) i wyjście
 

@@ -15,9 +15,15 @@ spec:
       labels:
         app: backend
     spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range . }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
       containers:
         - name: backend
-          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+          image: {{ include "pm.image" (dict "image" .Values.backend.image "registry" .Values.global.appImageRegistry) }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - containerPort: {{ .Values.backend.serverPort }}
@@ -41,6 +47,18 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.backend.jwt.secretName }}
                   key: JWT_SECRET
+            {{- if .Values.redisHA.enabled }}
+            - name: SPRING_DATA_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.redisHA.auth.existingSecret }}
+                  key: {{ .Values.redisHA.auth.existingSecretPasswordKey }}
+            - name: SPRING_DATA_REDIS_SENTINEL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.redisHA.auth.existingSecret }}
+                  key: {{ .Values.redisHA.auth.existingSecretPasswordKey }}
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /api/health

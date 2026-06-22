@@ -10,3 +10,5 @@ postgres:
 
 ingress:
   host: pm.local
+  tls:
+    enabled: false           # lokalny dev na czystym HTTP, bez cert-manager

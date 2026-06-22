@@ -4,6 +4,9 @@ namespace:
 
 global:
   imagePullPolicy: IfNotPresent
+  appImageRegistry: ""     # np. ghcr.io/OWNER dla obrazów aplikacji (puste = lokalne, dev).
+                           # Uwaga: NIE global.imageRegistry — ten klucz jest zarezerwowany przez subchart Bitnami.
+  imagePullSecrets: []     # np. [ghcr-pull] (współdzielone z subchartami)
 
 postgres:
   mode: cnpg
@@ -54,6 +57,7 @@ backend:
   image:
     repository: pm-backend
     tag: "3.2-auth"
+    digest: ""             # np. sha256:...; ustawione => priorytet nad tag
   replicas: 2
   serverPort: 3000
   service:
@@ -80,6 +84,7 @@ frontend:
   image:
     repository: pm-frontend
     tag: "1.1-auth"
+    digest: ""             # np. sha256:...; ustawione => priorytet nad tag
   replicas: 2
   service:
     port: 80
@@ -95,12 +100,50 @@ ingress:
   enabled: true
   className: nginx
   host: pm.local
+  tls:
+    enabled: false
+    secretName: pm-tls
+    clusterIssuer: ""      # np. letsencrypt-prod (wymaga zainstalowanego cert-manager)
+    sslRedirect: true
 
 redis:
   enabled: true
   image: redis:7-alpine
   host: redis
   port: 6379
+
+# Redis HA (Bitnami subchart, Sentinel) — produkcja. Wzajemnie wykluczające się z redis.enabled.
+redisHA:
+  enabled: false
+  fullnameOverride: pm-redis
+  architecture: replication
+  auth:
+    enabled: true
+    sentinel: true
+    existingSecret: redis-credentials
+    existingSecretPasswordKey: redis-password
+  commonConfiguration: |-
+    appendonly yes
+    save ""
+    notify-keyspace-events Ex
+  sentinel:
+    enabled: true
+    masterSet: mymaster
+    quorum: 2
+  replica:
+    replicaCount: 3
+    persistence:
+      enabled: true
+      size: 1Gi
+      storageClass: standard
+    pdb:
+      create: true
+      maxUnavailable: 1
+  master:
+    persistence:
+      enabled: true
+      size: 1Gi
+      storageClass: standard
 
 hpa:
   enabled: true

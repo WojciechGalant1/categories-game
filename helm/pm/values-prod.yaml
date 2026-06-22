@@ -1,3 +1,33 @@
+global:
+  imagePullPolicy: IfNotPresent
+  appImageRegistry: ghcr.io/OWNER       # PODMIEŃ na ownera/organizację (obrazy aplikacji)
+  imagePullSecrets:
+    - ghcr-pull
+
+backend:
+  image:
+    repository: pm-backend
+    digest: "sha256:REPLACE_WITH_BACKEND_DIGEST"
+
+frontend:
+  image:
+    repository: pm-frontend
+    digest: "sha256:REPLACE_WITH_FRONTEND_DIGEST"
+
+redis:
+  enabled: false               # prod używa HA (Bitnami Sentinel) zamiast pojedynczego Redisa
+
+redisHA:
+  enabled: true
+
+ingress:
+  host: pm.example.com         # PODMIEŃ na właściwą domenę produkcyjną
+  tls:
+    enabled: true
+    secretName: pm-tls
+    clusterIssuer: letsencrypt-prod
+    sslRedirect: true
+
 postgres:
   cnpg:
     primaryUpdateStrategy: supervised

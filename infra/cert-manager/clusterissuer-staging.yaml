@@ -1,0 +1,18 @@
+# ClusterIssuer dla Let's Encrypt STAGING.
+# Używaj go najpierw do testów - nie podlega ostrym rate-limitom prod.
+# Certyfikaty staging NIE są zaufane przez przeglądarki (to oczekiwane).
+# Wymaga zainstalowanego cert-manager w klastrze.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: admin@example.com           # PODMIEŃ na właściwy adres e-mail
+    privateKeySecretRef:
+      name: letsencrypt-staging
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: nginx     # składnia cert-manager >= 1.7
