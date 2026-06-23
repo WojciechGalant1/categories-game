@@ -43,16 +43,45 @@ Multiplayerowa gra słowna wdrożona na Kubernetes przy użyciu Helm.
 ## Architektura
 
 ```mermaid
-flowchart LR
-    user[Przegladarka] -->|http://pm.local| ingress[ingress-nginx]
-    ingress -->|path /| feSvc[Service<br/>frontend-svc:80]
-    ingress -->|path /api| beSvc[Service<br/>backend-svc:3000]
-    feSvc --> feDep[Deployment frontend<br/>2 repliki<br/>nginx + Vite build]
-    beSvc --> beDep[Deployment backend<br/>2-10 replik HPA<br/>Spring Boot + JPA]
-    beDep -->|"jdbc:postgresql://pm-postgres-rw"| pgRw[Service pm-postgres-rw]
-    beDep -->|Pub/Sub room:updates| redis[Deployment redis:7-alpine]
-    pgRw --> cnpg[CloudNativePG Cluster<br/>pm-postgres x3]
-    cnpg --> pvc[(PVC 2Gi x3<br/>storageClass standard)]
+flowchart TD
+
+    user[🌐 Przeglądarka]
+
+    subgraph Networking
+        ingress[Ingress NGINX]
+        feSvc[Frontend Service<br/>frontend-svc:80]
+        beSvc[Backend Service<br/>backend-svc:3000]
+    end
+
+    subgraph Frontend
+        feDep[Frontend Deployment<br/>2 repliki<br/>Nginx + Vite]
+    end
+
+    subgraph Backend
+        beDep[Backend Deployment<br/>HPA 2-10 replik<br/>Spring Boot + JPA]
+        redis[Redis<br/>Pub/Sub]
+    end
+
+    subgraph Database
+        pgRw[PostgreSQL RW Service]
+        cnpg[CloudNativePG Cluster<br/>3 instancje]
+        pvc[(PVC 2Gi × 3)]
+    end
+
+    user -->|http://pm.local| ingress
+
+    ingress -->|/| feSvc
+    ingress -->|/api| beSvc
+
+    feSvc --> feDep
+
+    beSvc --> beDep
+
+    beDep -->|JDBC| pgRw
+    pgRw --> cnpg
+    cnpg --> pvc
+
+    beDep <-->|Pub/Sub<br/>room:updates| redis
 ```
 
 Frontend komunikuje się z backendem przez **relatywny** prefix `/api` (zob. [`frontend/src/services/api.ts`](frontend/src/services/api.ts)) — ten sam build chodzi za Ingressem niezależnie od hosta.
