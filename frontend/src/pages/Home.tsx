@@ -1,13 +1,14 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, setNick, getNick, saveSession } from "../services/api";
+import type { PublicRoomSummary } from "../types";
 
 const Home = () => {
     const navigate = useNavigate();
     const [nick, setNickState] = useState(getNick());
     const [roomCode, setRoomCode] = useState("");
     const [isPublic, setIsPublic] = useState(false);
-    const [publicRooms, setPublicRooms] = useState<any[]>([]);
+    const [publicRooms, setPublicRooms] = useState<PublicRoomSummary[]>([]);
 
     useEffect(() => {
         const fetchRooms = async () => {

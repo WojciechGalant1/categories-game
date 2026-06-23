@@ -1,9 +1,11 @@
+import type { Player, AnswersState, VotesState } from "../../types";
+
 interface ReviewPanelProps {
     categories: string[];
-    players: any[];
+    players: Player[];
     playerId: string;
-    gameAnswers: Record<string, Record<string, string>>;
-    gameVotes: Record<string, Record<string, Record<string, boolean>>>;
+    gameAnswers: AnswersState;
+    gameVotes: VotesState;
     isHost: boolean;
     currentRound: number;
     totalRounds: number;
@@ -26,7 +28,7 @@ export const ReviewPanel = ({
                             <h3 className="text-xl font-bold text-brand-accent">{cat}</h3>
                         </div>
                         <div className="p-4 flex flex-col gap-3">
-                            {players.map((p: any) => {
+                            {players.map((p: Player) => {
                                 const playerAnswer = gameAnswers?.[p.id]?.[cat] || '';
                                 const isMe = p.id === playerId;
                                 

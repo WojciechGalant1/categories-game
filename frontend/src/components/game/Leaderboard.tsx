@@ -1,5 +1,7 @@
+import type { Player } from "../../types";
+
 interface LeaderboardProps {
-    players: any[];
+    players: Player[];
     scores: Record<string, number>;
     playerId: string;
     totalRounds: number;
@@ -8,7 +10,7 @@ interface LeaderboardProps {
 }
 
 export const Leaderboard = ({ players, scores, playerId, totalRounds, isHost, onReset }: LeaderboardProps) => {
-    const sorted = [...players].sort((a: any, b: any) => (scores?.[b.id] || 0) - (scores?.[a.id] || 0));
+    const sorted = [...players].sort((a: Player, b: Player) => (scores?.[b.id] || 0) - (scores?.[a.id] || 0));
 
     return (
         <div className="animate-fade-in-up w-full max-w-2xl mx-auto">
@@ -17,7 +19,7 @@ export const Leaderboard = ({ players, scores, playerId, totalRounds, isHost, on
                 <p className="text-gray-400 mb-8 text-lg">Oto wyniki po {totalRounds} rundach:</p>
                 
                 <div className="flex flex-col gap-4">
-                    {sorted.map((p: any, idx: number) => (
+                    {sorted.map((p: Player, idx: number) => (
                         <div key={p.id} className={`p-5 rounded-xl border flex items-center justify-between ${idx === 0 ? 'bg-gradient-to-r from-yellow-500/10 to-yellow-600/20 border-yellow-500/50 shadow-[0_0_15px_rgba(234,179,8,0.2)]' : 'bg-brand-surface border-brand-border'}`}>
                             <div className="flex items-center gap-4">
                                 <span className={`text-3xl font-display font-bold ${idx === 0 ? 'text-yellow-500' : idx === 1 ? 'text-gray-300' : idx === 2 ? 'text-amber-700' : 'text-gray-500'}`}>

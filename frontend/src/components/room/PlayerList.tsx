@@ -1,8 +1,4 @@
-interface Player {
-    id: string;
-    nick: string;
-    isHost: boolean;
-}
+import type { Player } from "../../types";
 
 interface PlayerListProps {
     players: Player[];

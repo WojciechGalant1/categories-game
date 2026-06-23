@@ -1,45 +1,39 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
-import {
-    api,
-    clearSession,
-    ensureSession,
-    getAccessToken,
-} from "../services/api";
-
-const PING_INTERVAL_MS = 30000;
-const MAX_RECONNECT_DELAY_MS = 30000;
+import { useState, useEffect, useRef } from "react";
+import { api } from "../services/api";
+import type { Player } from "../types";
+import { useWebSocketSync } from "./useWebSocketSync";
+import { useGameTimer } from "./useGameTimer";
+import { useGameActions } from "./useGameActions";
 
 export const useRoomWebSocket = (roomCode: string) => {
-    const navigate = useNavigate();
-    const location = useLocation();
-    const [room, setRoom] = useState<any>(null);
-    const [playerId, setPlayerId] = useState<string | null>(null);
-    const [accessToken, setAccessTokenState] = useState<string | null>(null);
-    const [sessionReady, setSessionReady] = useState(false);
     const [answers, setAnswers] = useState<Record<string, string>>({});
-    const [displayTimeLeft, setDisplayTimeLeft] = useState<number | undefined>();
     const answersRef = useRef(answers);
     const submittedRef = useRef(false);
-    const wsRef = useRef<WebSocket | null>(null);
-    const reconnectDelayRef = useRef(1000);
-    const reconnectTimerRef = useRef<number | null>(null);
-    const pingTimerRef = useRef<number | null>(null);
-    const mountedRef = useRef(true);
-    const playerIdRef = useRef<string | null>(null);
-    const accessTokenRef = useRef<string | null>(null);
 
     useEffect(() => {
         answersRef.current = answers;
     }, [answers]);
 
-    useEffect(() => {
-        playerIdRef.current = playerId;
-    }, [playerId]);
+    const handleReviewingPhase = () => {
+        if (!submittedRef.current) {
+            submittedRef.current = true;
+            api.submitAnswers(roomCode, answersRef.current).catch(err => {
+                console.error("Błąd wysyłania odpowiedzi", err);
+            });
+        }
+    };
 
-    useEffect(() => {
-        accessTokenRef.current = accessToken;
-    }, [accessToken]);
+    const { room, setRoom, playerId, sessionReady, wsRef } = useWebSocketSync(
+        roomCode,
+        handleReviewingPhase
+    );
+
+    const { displayTimeLeft } = useGameTimer(room);
+
+    const me = room?.players?.find((p: Player) => p.id === playerId);
+    const isHost = me?.isHost ?? false;
+
+    const gameActions = useGameActions(roomCode, room, isHost, setRoom, wsRef);
 
     useEffect(() => {
         if (room?.game?.currentRound) {
@@ -48,287 +42,14 @@ export const useRoomWebSocket = (roomCode: string) => {
         }
     }, [room?.game?.currentRound]);
 
-    useEffect(() => {
-        if (!roomCode) {
-            navigate("/");
-            return;
-        }
-
-        let cancelled = false;
-        (async () => {
-            const session = await ensureSession(roomCode);
-            if (cancelled) return;
-            if (!session) {
-                navigate("/");
-                return;
-            }
-            setPlayerId(session.playerId);
-            setAccessTokenState(session.accessToken);
-            setSessionReady(true);
-        })();
-
-        return () => {
-            cancelled = true;
-        };
-    }, [roomCode, navigate]);
-
-    const processRoomUpdate = useCallback(async (data: any) => {
-        setRoom(data);
-
-        if (data.status === "playing" && location.pathname.includes("/room")) {
-            navigate(`/game?code=${roomCode}`);
-        }
-        if (data.status === "lobby" && location.pathname.includes("/game")) {
-            navigate(`/room?code=${roomCode}`);
-        }
-
-        if (data.status === "reviewing" && !submittedRef.current && playerIdRef.current) {
-            submittedRef.current = true;
-            try {
-                await api.submitAnswers(roomCode, answersRef.current);
-            } catch (err) {
-                console.error("Błąd wysyłania odpowiedzi", err);
-            }
-        }
-    }, [location.pathname, navigate, roomCode]);
-
-    const tryRejoin = useCallback(async () => {
-        const session = await ensureSession(roomCode);
-        if (session) {
-            setPlayerId(session.playerId);
-            setAccessTokenState(session.accessToken);
-            return session;
-        }
-        navigate("/");
-        return null;
-    }, [navigate, roomCode]);
-
-    const fetchFallback = useCallback(async () => {
-        try {
-            const data = await api.getRoomState(roomCode);
-            await processRoomUpdate(data);
-        } catch {
-            const session = await tryRejoin();
-            if (session) {
-                try {
-                    const data = await api.getRoomState(roomCode);
-                    await processRoomUpdate(data);
-                } catch {
-                    navigate("/");
-                }
-            }
-        }
-    }, [navigate, processRoomUpdate, roomCode, tryRejoin]);
-
-    useEffect(() => {
-        if (!roomCode || !sessionReady || !accessToken || !playerId) {
-            return;
-        }
-
-        mountedRef.current = true;
-        reconnectDelayRef.current = 1000;
-
-        const clearTimers = () => {
-            if (pingTimerRef.current !== null) {
-                clearInterval(pingTimerRef.current);
-                pingTimerRef.current = null;
-            }
-            if (reconnectTimerRef.current !== null) {
-                clearTimeout(reconnectTimerRef.current);
-                reconnectTimerRef.current = null;
-            }
-        };
-
-        const scheduleReconnect = () => {
-            if (!mountedRef.current) return;
-            const delay = reconnectDelayRef.current;
-            reconnectDelayRef.current = Math.min(delay * 2, MAX_RECONNECT_DELAY_MS);
-            reconnectTimerRef.current = window.setTimeout(() => {
-                connect();
-            }, delay);
-        };
-
-        const connect = () => {
-            if (!mountedRef.current) return;
-
-            const token = accessTokenRef.current || getAccessToken(roomCode);
-            if (!token) {
-                tryRejoin().then((session) => {
-                    if (session) connect();
-                });
-                return;
-            }
-
-            clearTimers();
-            if (wsRef.current) {
-                wsRef.current.close();
-                wsRef.current = null;
-            }
-
-            const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-            const ws = new WebSocket(`${protocol}//${window.location.host}/api/ws/rooms/${roomCode}`);
-            wsRef.current = ws;
-
-            ws.onopen = () => {
-                reconnectDelayRef.current = 1000;
-                ws.send(JSON.stringify({ type: "subscribe", token }));
-                pingTimerRef.current = window.setInterval(() => {
-                    if (ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify({ type: "ping" }));
-                    }
-                }, PING_INTERVAL_MS);
-            };
-
-            ws.onmessage = (event) => {
-                try {
-                    const msg = JSON.parse(event.data);
-                    if (msg.type === "room_state") {
-                        processRoomUpdate(msg.data);
-                    } else if (msg.type === "error") {
-                        console.error("WebSocket error:", msg.message);
-                        tryRejoin();
-                    }
-                } catch (err) {
-                    console.error("Invalid WebSocket message", err);
-                }
-            };
-
-            ws.onerror = () => {
-                fetchFallback();
-            };
-
-            ws.onclose = () => {
-                clearTimers();
-                if (mountedRef.current) {
-                    fetchFallback();
-                    scheduleReconnect();
-                }
-            };
-        };
-
-        connect();
-
-        return () => {
-            mountedRef.current = false;
-            clearTimers();
-            if (wsRef.current) {
-                wsRef.current.close();
-                wsRef.current = null;
-            }
-        };
-    }, [roomCode, sessionReady, accessToken, playerId, navigate, processRoomUpdate, fetchFallback, tryRejoin]);
-
-    useEffect(() => {
-        if (room?.status === "playing" && room?.game?.mainTimeLeft !== undefined) {
-            setDisplayTimeLeft(room.game.mainTimeLeft);
-        } else if (room?.status !== "playing") {
-            setDisplayTimeLeft(undefined);
-        }
-    }, [room?.game?.mainTimeLeft, room?.status, room?.game?.currentRound]);
-
-    useEffect(() => {
-        if (room?.status !== "playing") {
-            return;
-        }
-        const id = window.setInterval(() => {
-            setDisplayTimeLeft((t) => (t !== undefined && t > 0 ? t - 1 : t ?? 0));
-        }, 1000);
-        return () => clearInterval(id);
-    }, [room?.status, room?.game?.currentRound]);
-
-    const me = room?.players?.find((p: any) => p.id === playerId);
-    const isHost = me?.isHost ?? false;
-
-    const toggleCategory = async (category: string) => {
-        if (!isHost || !room) return;
-        const currentCats = room.settings.categories || [];
-        const newCats = currentCats.includes(category)
-            ? currentCats.filter((c: string) => c !== category)
-            : [...currentCats, category];
-
-        setRoom((prev: any) =>
-            prev ? { ...prev, settings: { ...prev.settings, categories: newCats } } : prev
-        );
-        await api.updateSettings(roomCode, { categories: newCats });
-    };
-
-    const updateTime = async (t: number) => {
-        if (!isHost || !room) return;
-        setRoom((prev: any) =>
-            prev ? { ...prev, settings: { ...prev.settings, timePerRound: t } } : prev
-        );
-        await api.updateSettings(roomCode, { timePerRound: t });
-    };
-
-    const updateRounds = async (change: number) => {
-        if (!isHost || !room) return;
-        const newRounds = Math.max(1, Math.min(20, room.settings.rounds + change));
-        setRoom((prev: any) =>
-            prev ? { ...prev, settings: { ...prev.settings, rounds: newRounds } } : prev
-        );
-        await api.updateSettings(roomCode, { rounds: newRounds });
-    };
-
-    const handleStartGame = async () => {
-        if (!isHost) return;
-        try {
-            await api.startGame(roomCode);
-        } catch {
-            alert("Błąd startu gry");
-        }
-    };
-
     const handleAnswerChange = (category: string, value: string) => {
         setAnswers((prev) => ({ ...prev, [category]: value }));
     };
 
-    const handleStopClick = async () => {
-        try {
-            await api.triggerStop(roomCode);
-        } catch {
-            alert("Błąd, nie udało się zatrzymać gry.");
-        }
-    };
-
     const handleNextRound = async () => {
-        try {
-            await api.nextRound(roomCode);
-            submittedRef.current = false;
-            setAnswers({});
-        } catch {
-            alert("Błąd przy przejściu do następnej rundy.");
-        }
-    };
-
-    const handleVote = async (targetPlayerId: string, category: string, isValid: boolean) => {
-        try {
-            await api.submitVote(roomCode, targetPlayerId, category, isValid);
-        } catch (err) {
-            console.error("Błąd głosowania", err);
-        }
-    };
-
-    const handleReset = async () => {
-        try {
-            await api.resetToLobby(roomCode);
-        } catch (err) {
-            console.error("Błąd resetowania", err);
-        }
-    };
-
-    const handleLeaveRoom = async () => {
-        mountedRef.current = false;
-        try {
-            await api.leaveRoom(roomCode);
-        } catch {
-            // Room may already be gone — still leave locally
-        }
-        if (wsRef.current) {
-            wsRef.current.close();
-            wsRef.current = null;
-        }
-        clearSession(roomCode);
-        navigate("/");
+        await gameActions.handleNextRound();
+        submittedRef.current = false;
+        setAnswers({});
     };
 
     return {
@@ -338,15 +59,16 @@ export const useRoomWebSocket = (roomCode: string) => {
         sessionReady,
         answers,
         displayTimeLeft,
-        toggleCategory,
-        updateTime,
-        updateRounds,
-        handleStartGame,
         handleAnswerChange,
-        handleStopClick,
         handleNextRound,
-        handleVote,
-        handleReset,
-        handleLeaveRoom,
+        // Spread the rest of actions
+        toggleCategory: gameActions.toggleCategory,
+        updateTime: gameActions.updateTime,
+        updateRounds: gameActions.updateRounds,
+        handleStartGame: gameActions.handleStartGame,
+        handleStopClick: gameActions.handleStopClick,
+        handleVote: gameActions.handleVote,
+        handleReset: gameActions.handleReset,
+        handleLeaveRoom: gameActions.handleLeaveRoom,
     };
 };
