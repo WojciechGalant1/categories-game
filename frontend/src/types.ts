@@ -44,3 +44,13 @@ export interface PublicRoomSummary {
     playersCount: number;
     maxPlayers: number;
 }
+
+export interface JoinResponse {
+    code: string;
+    playerId: string;
+    accessToken: string;
+}
+
+export interface SuccessResponse {
+    success: boolean;
+}

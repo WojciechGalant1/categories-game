@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { api, ensureSession, getAccessToken } from "../services/api";
+import { ApiHttpError } from "../services/errors";
 import type { Room } from "../types";
 
 const PING_INTERVAL_MS = 30000;
@@ -88,7 +89,11 @@ export const useWebSocketSync = (roomCode: string, onReviewingPhase?: () => void
         try {
             const data = await api.getRoomState(roomCode);
             await processRoomUpdate(data);
-        } catch {
+        } catch (err) {
+            if (err instanceof ApiHttpError && err.isUnauthorized) {
+                navigate("/");
+                return;
+            }
             const session = await tryRejoin();
             if (session) {
                 try {

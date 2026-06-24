@@ -30,7 +30,7 @@ const Game = () => {
     }
 
     const phase = room.status;
-    const currentLetter = room.game.currentLetter;
+    const currentLetter = room.game.currentLetter ?? '';
     const categories = room.settings.categories || [];
     const isReviewing = phase === 'reviewing';
     const isFinished = phase === 'finished';

@@ -1,3 +1,6 @@
+import { ApiHttpError } from './errors';
+import type { JoinResponse, PublicRoomSummary, Room, SuccessResponse } from '../types';
+
 const API_URL = '/api';
 
 const authHeaders = (token: string) => ({
@@ -5,18 +8,27 @@ const authHeaders = (token: string) => ({
     Authorization: `Bearer ${token}`,
 });
 
-const handleAuthError = (res: Response, roomCode?: string) => {
-    if (res.status === 401 && roomCode) {
-        clearAccessToken(roomCode);
-        clearPlayerId(roomCode);
+type ApiErrorBody = { error?: string };
+
+const parseJsonResponse = async <T>(res: Response): Promise<T> => {
+    const body = (await res.json().catch(() => ({}))) as ApiErrorBody & T;
+    if (!res.ok) {
+        throw new ApiHttpError(res.status, body.error || res.statusText);
     }
+    return body;
 };
 
-const authFetch = async (roomCode: string, url: string, options: RequestInit = {}) => {
+const authFetch = async (
+    roomCode: string,
+    url: string,
+    options: RequestInit = {},
+    retried = false,
+): Promise<Response> => {
     const token = getAccessToken(roomCode);
     if (!token) {
-        throw new Error('No access token');
+        throw new ApiHttpError(401, 'No access token');
     }
+
     const res = await fetch(url, {
         ...options,
         headers: {
@@ -24,92 +36,103 @@ const authFetch = async (roomCode: string, url: string, options: RequestInit = {
             ...(options.headers || {}),
         },
     });
-    handleAuthError(res, roomCode);
+
+    if (res.status === 401 && roomCode && !retried) {
+        clearSession(roomCode);
+        const session = await ensureSession(roomCode);
+        if (session) {
+            return authFetch(roomCode, url, options, true);
+        }
+    }
+
+    if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as ApiErrorBody;
+        throw new ApiHttpError(res.status, body.error || res.statusText);
+    }
+
     return res;
 };
 
+const authJson = async <T>(
+    roomCode: string,
+    url: string,
+    options: RequestInit = {},
+): Promise<T> => {
+    const res = await authFetch(roomCode, url, options);
+    return res.json();
+};
+
 export const api = {
-    getRooms: async () => {
+    getRooms: async (): Promise<PublicRoomSummary[]> => {
         const res = await fetch(`${API_URL}/rooms`);
-        return res.json();
+        return parseJsonResponse<PublicRoomSummary[]>(res);
     },
-    createRoom: async (nick: string, isPublic: boolean) => {
+    createRoom: async (nick: string, isPublic: boolean): Promise<JoinResponse> => {
         const res = await fetch(`${API_URL}/rooms`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ nick, isPublic }),
         });
-        return res.json();
+        return parseJsonResponse<JoinResponse>(res);
     },
-    joinRoom: async (code: string, nick: string) => {
+    joinRoom: async (code: string, nick: string): Promise<JoinResponse> => {
         const res = await fetch(`${API_URL}/rooms/${code}/join`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ nick }),
         });
-        return res.json();
+        return parseJsonResponse<JoinResponse>(res);
     },
-    getRoomState: async (code: string) => {
-        const res = await authFetch(code, `${API_URL}/rooms/${code}`);
-        if (!res.ok) throw new Error('Room not found');
-        return res.json();
+    getRoomState: async (code: string): Promise<Room> => {
+        return authJson<Room>(code, `${API_URL}/rooms/${code}`);
     },
-    updateSettings: async (code: string, settings: Record<string, unknown>) => {
-        const res = await authFetch(code, `${API_URL}/rooms/${code}/settings`, {
+    updateSettings: async (code: string, settings: Record<string, unknown>): Promise<SuccessResponse> => {
+        return authJson<SuccessResponse>(code, `${API_URL}/rooms/${code}/settings`, {
             method: 'POST',
             body: JSON.stringify({ settings }),
         });
-        return res.json();
     },
-    startGame: async (code: string) => {
-        const res = await authFetch(code, `${API_URL}/rooms/${code}/start`, {
+    startGame: async (code: string): Promise<SuccessResponse> => {
+        return authJson<SuccessResponse>(code, `${API_URL}/rooms/${code}/start`, {
             method: 'POST',
             body: JSON.stringify({}),
         });
-        return res.json();
     },
-    triggerStop: async (code: string) => {
-        const res = await authFetch(code, `${API_URL}/rooms/${code}/stop`, {
+    triggerStop: async (code: string): Promise<SuccessResponse> => {
+        return authJson<SuccessResponse>(code, `${API_URL}/rooms/${code}/stop`, {
             method: 'POST',
             body: JSON.stringify({}),
         });
-        return res.json();
     },
-    submitAnswers: async (code: string, answers: Record<string, string>) => {
-        const res = await authFetch(code, `${API_URL}/rooms/${code}/answers`, {
+    submitAnswers: async (code: string, answers: Record<string, string>): Promise<SuccessResponse> => {
+        return authJson<SuccessResponse>(code, `${API_URL}/rooms/${code}/answers`, {
             method: 'POST',
             body: JSON.stringify({ answers }),
         });
-        return res.json();
     },
-    nextRound: async (code: string) => {
-        const res = await authFetch(code, `${API_URL}/rooms/${code}/next-round`, {
+    nextRound: async (code: string): Promise<SuccessResponse> => {
+        return authJson<SuccessResponse>(code, `${API_URL}/rooms/${code}/next-round`, {
             method: 'POST',
             body: JSON.stringify({}),
         });
-        return res.json();
     },
-    submitVote: async (code: string, targetPlayerId: string, category: string, isValid: boolean) => {
-        const res = await authFetch(code, `${API_URL}/rooms/${code}/vote`, {
+    submitVote: async (code: string, targetPlayerId: string, category: string, isValid: boolean): Promise<SuccessResponse> => {
+        return authJson<SuccessResponse>(code, `${API_URL}/rooms/${code}/vote`, {
             method: 'POST',
             body: JSON.stringify({ targetPlayerId, category, isValid }),
         });
-        return res.json();
     },
-    resetToLobby: async (code: string) => {
-        const res = await authFetch(code, `${API_URL}/rooms/${code}/reset`, {
+    resetToLobby: async (code: string): Promise<SuccessResponse> => {
+        return authJson<SuccessResponse>(code, `${API_URL}/rooms/${code}/reset`, {
             method: 'POST',
             body: JSON.stringify({}),
         });
-        return res.json();
     },
-    leaveRoom: async (code: string) => {
-        const res = await authFetch(code, `${API_URL}/rooms/${code}/leave`, {
+    leaveRoom: async (code: string): Promise<SuccessResponse> => {
+        return authJson<SuccessResponse>(code, `${API_URL}/rooms/${code}/leave`, {
             method: 'POST',
             body: JSON.stringify({}),
         });
-        if (!res.ok) throw new Error('Leave failed');
-        return res.json();
     },
 };
 
@@ -168,11 +191,14 @@ export const ensureSession = async (roomCode: string): Promise<{ playerId: strin
         return null;
     }
 
-    const res = await api.joinRoom(roomCode, nick);
-    if (res.error || !res.accessToken) {
+    try {
+        const res = await api.joinRoom(roomCode, nick);
+        if (!res.accessToken) {
+            return null;
+        }
+        saveSession(roomCode, res.playerId, res.accessToken);
+        return { playerId: res.playerId, accessToken: res.accessToken };
+    } catch {
         return null;
     }
-
-    saveSession(roomCode, res.playerId, res.accessToken);
-    return { playerId: res.playerId, accessToken: res.accessToken };
 };

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, setNick, getNick, saveSession } from "../services/api";
+import { ApiHttpError } from "../services/errors";
 import type { PublicRoomSummary } from "../types";
 
 const Home = () => {
@@ -29,11 +30,14 @@ const Home = () => {
         setNick(nick);
         try {
             const res = await api.createRoom(nick, isPublic);
-            if (res.error) throw new Error(res.error);
             saveSession(res.code, res.playerId, res.accessToken);
             navigate(`/room?code=${res.code}`);
-        } catch (err: any) {
-            alert(err.message);
+        } catch (err) {
+            if (err instanceof ApiHttpError) {
+                alert(err.message);
+            } else {
+                alert("Nie udało się utworzyć pokoju");
+            }
         }
     };
 
@@ -43,11 +47,20 @@ const Home = () => {
         setNick(nick);
         try {
             const res = await api.joinRoom(codeToJoin, nick);
-            if (res.error) throw new Error(res.error);
             saveSession(res.code, res.playerId, res.accessToken);
             navigate(`/room?code=${res.code}`);
-        } catch (err: any) {
-            alert(err.message);
+        } catch (err) {
+            if (err instanceof ApiHttpError) {
+                if (err.isForbidden) {
+                    alert("Gra już trwa — nie można dołączyć nowym nickiem");
+                } else if (err.status === 404) {
+                    alert("Pokój nie istnieje");
+                } else {
+                    alert(err.message);
+                }
+            } else {
+                alert("Nie udało się dołączyć do pokoju");
+            }
         }
     };
 

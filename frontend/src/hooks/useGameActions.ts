@@ -1,6 +1,21 @@
 import { useNavigate } from "react-router-dom";
 import { api, clearSession } from "../services/api";
+import { ApiHttpError } from "../services/errors";
 import type { Room } from "../types";
+
+const handleApiError = (err: unknown, navigate: ReturnType<typeof useNavigate>) => {
+    if (err instanceof ApiHttpError) {
+        if (err.isUnauthorized) {
+            navigate("/");
+            return;
+        }
+        if (err.isForbidden) {
+            alert(err.message);
+            return;
+        }
+        alert(err.message);
+    }
+};
 
 export const useGameActions = (
     roomCode: string,
@@ -21,7 +36,11 @@ export const useGameActions = (
         setRoom((prev: Room | null) =>
             prev ? { ...prev, settings: { ...prev.settings, categories: newCats } } : prev
         );
-        await api.updateSettings(roomCode, { categories: newCats });
+        try {
+            await api.updateSettings(roomCode, { categories: newCats });
+        } catch (err) {
+            handleApiError(err, navigate);
+        }
     };
 
     const updateTime = async (t: number) => {
@@ -29,7 +48,11 @@ export const useGameActions = (
         setRoom((prev: Room | null) =>
             prev ? { ...prev, settings: { ...prev.settings, timePerRound: t } } : prev
         );
-        await api.updateSettings(roomCode, { timePerRound: t });
+        try {
+            await api.updateSettings(roomCode, { timePerRound: t });
+        } catch (err) {
+            handleApiError(err, navigate);
+        }
     };
 
     const updateRounds = async (change: number) => {
@@ -38,31 +61,35 @@ export const useGameActions = (
         setRoom((prev: Room | null) =>
             prev ? { ...prev, settings: { ...prev.settings, rounds: newRounds } } : prev
         );
-        await api.updateSettings(roomCode, { rounds: newRounds });
+        try {
+            await api.updateSettings(roomCode, { rounds: newRounds });
+        } catch (err) {
+            handleApiError(err, navigate);
+        }
     };
 
     const handleStartGame = async () => {
         if (!isHost) return;
         try {
             await api.startGame(roomCode);
-        } catch {
-            alert("Błąd startu gry");
+        } catch (err) {
+            handleApiError(err, navigate);
         }
     };
 
     const handleStopClick = async () => {
         try {
             await api.triggerStop(roomCode);
-        } catch {
-            alert("Błąd, nie udało się zatrzymać gry.");
+        } catch (err) {
+            handleApiError(err, navigate);
         }
     };
 
     const handleNextRound = async () => {
         try {
             await api.nextRound(roomCode);
-        } catch {
-            alert("Błąd przy przejściu do następnej rundy.");
+        } catch (err) {
+            handleApiError(err, navigate);
         }
     };
 
@@ -70,7 +97,7 @@ export const useGameActions = (
         try {
             await api.submitVote(roomCode, targetPlayerId, category, isValid);
         } catch (err) {
-            console.error("Błąd głosowania", err);
+            handleApiError(err, navigate);
         }
     };
 
@@ -78,7 +105,7 @@ export const useGameActions = (
         try {
             await api.resetToLobby(roomCode);
         } catch (err) {
-            console.error("Błąd resetowania", err);
+            handleApiError(err, navigate);
         }
     };
 

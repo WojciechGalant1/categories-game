@@ -470,6 +470,8 @@ Parametry bazowe: [`helm/pm/values.yaml`](helm/pm/values.yaml). Override minikub
 | CORS / WS originy           | `values.yaml` → `backend.cors.allowedOrigins`, `backend.ws.allowedOrigins`                  | `*` (dev); prod: `https://pm.example.com`              |
 | Rate limiting (Redis)       | `values.yaml` → `backend.rateLimit.*`                                                       | włączone, 20 req / 60s na IP (create/join)             |
 | Graceful shutdown           | `values.yaml` → `backend.terminationGracePeriodSeconds`                                     | 40s + preStop sleep 5                                  |
+| Frontend nginx (CSP/headers)| [`frontend/nginx.conf`](frontend/nginx.conf)                                                | CSP, X-Frame-Options, gzip, cache statyków             |
+| Frontend auth errors        | [`frontend/src/services/api.ts`](frontend/src/services/api.ts)                              | 401 rejoin+retry, 403 alert                              |
 
 ## Helm Chart
 
@@ -692,6 +694,21 @@ Kontroler nie zawiera już bloków `try/catch` ani ręcznego sprawdzania nicka.
 **Graceful shutdown.** `server.shutdown=graceful` + `spring.lifecycle.timeout-per-shutdown-phase=30s`; w K8s `terminationGracePeriodSeconds: 40` i `preStop sleep 5` na deregistrację endpointów przed zamknięciem JVM.
 
 **Originy CORS/WebSocket.** Zamiast twardego `*`: `backend.cors.allowedOrigins` (HTTP API) i `backend.ws.allowedOrigins` (WebSocket). Dev: `*`; prod: `https://pm.example.com` (PODMIEŃ na właściwą domenę).
+
+## Hardening frontendu
+
+Warstwa statyczna (nginx) i klient API zostały utwardzone:
+
+**Nagłówki nginx + CSP.** [`frontend/nginx.conf`](frontend/nginx.conf) dodaje: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, `Content-Security-Policy` (`connect-src 'self' ws: wss:` dla REST i WebSocket na tym samym hoście). HSTS pozostaje na ingress (TLS). Gzip dla JS/CSS/JSON/SVG; cache `immutable` (1 rok) dla hashowanych statyków Vite; `index.html` z `Cache-Control: no-cache`.
+
+**npm ci.** Dockerfile używa `npm ci` z `package-lock.json` — deterministyczny build obrazu.
+
+**Obsługa 401/403.** [`frontend/src/services/api.ts`](frontend/src/services/api.ts) + `ApiHttpError`:
+- **401** na endpointach chronionych: wyczyść sesję → `ensureSession` (rejoin nick+kod) → jeden retry; przy trwałym braku sesji → redirect na `/`.
+- **403** (np. gość próbuje startu, join do trwającej gry): `alert` z komunikatem backendu, sesja zostaje.
+- Publiczne `create`/`join` parsują kody HTTP (404, 400, 403) zamiast pola `error` w 200.
+
+Po zmianie nginx trzeba przebudować obraz frontendu i (prod) odświeżyć digest w `values-prod.yaml`.
 
 ## Produkcja
 
