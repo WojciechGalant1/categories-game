@@ -39,6 +39,9 @@ public class Room {
     @Embedded
     private GameState game;
 
+    @Version
+    private Long version;
+
     public enum RoomStatus {
         lobby, playing, reviewing, finished
     }
@@ -111,5 +114,13 @@ public class Room {
 
     public void setGame(GameState game) {
         this.game = game;
+    }
+
+    public Long getVersion() {
+        return version;
+    }
+
+    public void setVersion(Long version) {
+        this.version = version;
     }
 }

@@ -1,0 +1,24 @@
+{{- if .Values.pdb.enabled }}
+# PDB warstwy aplikacji. CNPG i Redis HA mają własne PDB (osobne szablony/subchart).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend-pdb
+  namespace: {{ include "pm.namespace" . }}
+spec:
+  maxUnavailable: {{ .Values.pdb.backend.maxUnavailable }}
+  selector:
+    matchLabels:
+      app: backend
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: frontend-pdb
+  namespace: {{ include "pm.namespace" . }}
+spec:
+  maxUnavailable: {{ .Values.pdb.frontend.maxUnavailable }}
+  selector:
+    matchLabels:
+      app: frontend
+{{- end }}

@@ -8,6 +8,12 @@ postgres:
   flyway:
     baselineOnMigrate: false
 
+# Observability: metryki domyślnie off (brak Prometheus Operatora w dev), logi tekstowe.
+# Actuator i tak działa na porcie 9090 (probes); włącz metrics.* by scrapować.
+
+networkPolicy:
+  enabled: false             # standardowy CNI minikube nie egzekwuje NetworkPolicy (wymaga --cni=calico)
+
 ingress:
   host: pm.local
   tls:

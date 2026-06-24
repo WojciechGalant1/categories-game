@@ -2,6 +2,9 @@ package com.example.panstwamiasta.service;
 
 import com.example.panstwamiasta.auth.PlayerSessionTokenService;
 import com.example.panstwamiasta.dto.*;
+import com.example.panstwamiasta.exception.GameAlreadyStartedException;
+import com.example.panstwamiasta.exception.InvalidRoomActionException;
+import com.example.panstwamiasta.exception.RoomNotFoundException;
 import com.example.panstwamiasta.model.GameState;
 import com.example.panstwamiasta.model.Player;
 import com.example.panstwamiasta.model.RoomSettings;
@@ -9,6 +12,9 @@ import com.example.panstwamiasta.room.Room;
 import com.example.panstwamiasta.repository.RoomRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.retry.annotation.Backoff;
+import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -143,10 +149,11 @@ public class RoomService {
 
     // Join or rejoin room
     @Transactional
+    @Retryable(retryFor = OptimisticLockingFailureException.class, maxAttempts = 3, backoff = @Backoff(delay = 50))
     public JoinResponse joinRoom(String code, JoinRoomRequest request) {
         Room room = roomRepository.findById(code).orElse(null);
         if (room == null) {
-            throw new RuntimeException("Room not found");
+            throw new RoomNotFoundException();
         }
 
         Optional<Player> existingPlayer = room.getPlayers().stream()
@@ -158,10 +165,10 @@ public class RoomService {
         }
 
         if (room.getStatus() != Room.RoomStatus.lobby) {
-            throw new RuntimeException("Game already started");
+            throw new GameAlreadyStartedException();
         }
         if (room.getPlayers().size() >= room.getSettings().getMaxPlayers()) {
-            throw new RuntimeException("Room is full");
+            throw new InvalidRoomActionException("Room is full");
         }
 
         UUID playerId = UUID.randomUUID();
@@ -175,13 +182,14 @@ public class RoomService {
 
     // Update settings
     @Transactional
+    @Retryable(retryFor = OptimisticLockingFailureException.class, maxAttempts = 3, backoff = @Backoff(delay = 50))
     public void updateSettings(String code, UUID playerId, UpdateSettingsRequest request) {
         Room room = roomRepository.findById(code).orElse(null);
         if (room == null) {
-            throw new RuntimeException("Room not found");
+            throw new RoomNotFoundException();
         }
         if (room.getStatus() != Room.RoomStatus.lobby) {
-            throw new RuntimeException("Cannot change settings (game not in lobby)");
+            throw new InvalidRoomActionException("Cannot change settings (game not in lobby)");
         }
 
         RoomSettings newSettings = request.getSettings();
@@ -202,13 +210,14 @@ public class RoomService {
 
     // Start game
     @Transactional
+    @Retryable(retryFor = OptimisticLockingFailureException.class, maxAttempts = 3, backoff = @Backoff(delay = 50))
     public void startGame(String code, UUID playerId) {
         Room room = roomRepository.findById(code).orElse(null);
         if (room == null) {
-            throw new RuntimeException("Room not found");
+            throw new RoomNotFoundException();
         }
         if (room.getStatus() != Room.RoomStatus.lobby && room.getStatus() != Room.RoomStatus.reviewing) {
-            throw new RuntimeException("Cannot start game (wrong status)");
+            throw new InvalidRoomActionException("Cannot start game (wrong status)");
         }
 
         // Reset scores if first round
@@ -237,19 +246,20 @@ public class RoomService {
 
     // Trigger stop
     @Transactional
+    @Retryable(retryFor = OptimisticLockingFailureException.class, maxAttempts = 3, backoff = @Backoff(delay = 50))
     public void triggerStop(String code, UUID playerId) {
         Room room = roomRepository.findById(code).orElse(null);
         if (room == null) {
-            throw new RuntimeException("Room not found");
+            throw new RoomNotFoundException();
         }
         if (room.getStatus() != Room.RoomStatus.playing) {
-            throw new RuntimeException("Not in playing phase");
+            throw new InvalidRoomActionException("Not in playing phase");
         }
         Player player = room.getPlayers().stream()
             .filter(p -> p.getId().equals(playerId))
             .findFirst().orElse(null);
         if (player == null) {
-            throw new RuntimeException("Player not in room");
+            throw new InvalidRoomActionException("Player not in room");
         }
 
         String playerIdStr = playerId.toString();
@@ -266,16 +276,17 @@ public class RoomService {
 
     // Submit answers
     @Transactional
+    @Retryable(retryFor = OptimisticLockingFailureException.class, maxAttempts = 3, backoff = @Backoff(delay = 50))
     public void submitAnswers(String code, UUID playerId, SubmitAnswersRequest request) {
         Room room = roomRepository.findById(code).orElse(null);
         if (room == null) {
-            throw new RuntimeException("Room not found");
+            throw new RoomNotFoundException();
         }
         Player player = room.getPlayers().stream()
             .filter(p -> p.getId().equals(playerId))
             .findFirst().orElse(null);
         if (player == null) {
-            throw new RuntimeException("Player not in room");
+            throw new InvalidRoomActionException("Player not in room");
         }
 
         room.getGame().getAnswers().put(playerId.toString(), request.getAnswers());
@@ -284,19 +295,20 @@ public class RoomService {
 
     // Submit vote
     @Transactional
+    @Retryable(retryFor = OptimisticLockingFailureException.class, maxAttempts = 3, backoff = @Backoff(delay = 50))
     public void submitVote(String code, UUID voterId, SubmitVoteRequest request) {
         Room room = roomRepository.findById(code).orElse(null);
         if (room == null) {
-            throw new RuntimeException("Room not found");
+            throw new RoomNotFoundException();
         }
         if (room.getStatus() != Room.RoomStatus.reviewing) {
-            throw new RuntimeException("Not in reviewing phase");
+            throw new InvalidRoomActionException("Not in reviewing phase");
         }
         Player voter = room.getPlayers().stream()
             .filter(p -> p.getId().equals(voterId))
             .findFirst().orElse(null);
         if (voter == null) {
-            throw new RuntimeException("Voter not in room");
+            throw new InvalidRoomActionException("Voter not in room");
         }
 
         String targetId = request.getTargetPlayerId().toString();
@@ -312,13 +324,14 @@ public class RoomService {
 
     // Next round
     @Transactional
+    @Retryable(retryFor = OptimisticLockingFailureException.class, maxAttempts = 3, backoff = @Backoff(delay = 50))
     public void nextRound(String code, UUID playerId) {
         Room room = roomRepository.findById(code).orElse(null);
         if (room == null) {
-            throw new RuntimeException("Room not found");
+            throw new RoomNotFoundException();
         }
         if (room.getStatus() != Room.RoomStatus.reviewing) {
-            throw new RuntimeException("Not in reviewing phase");
+            throw new InvalidRoomActionException("Not in reviewing phase");
         }
 
         // Calculate scores
@@ -416,10 +429,11 @@ public class RoomService {
 
     // Reset to lobby
     @Transactional
+    @Retryable(retryFor = OptimisticLockingFailureException.class, maxAttempts = 3, backoff = @Backoff(delay = 50))
     public void resetToLobby(String code, UUID playerId) {
         Room room = roomRepository.findById(code).orElse(null);
         if (room == null) {
-            throw new RuntimeException("Room not found");
+            throw new RoomNotFoundException();
         }
 
         room.setStatus(Room.RoomStatus.lobby);
@@ -436,10 +450,11 @@ public class RoomService {
 
     // Leave room (any phase)
     @Transactional
+    @Retryable(retryFor = OptimisticLockingFailureException.class, maxAttempts = 3, backoff = @Backoff(delay = 50))
     public void leaveRoom(String code, UUID playerId) {
         Room room = roomRepository.findById(code).orElse(null);
         if (room == null) {
-            throw new RuntimeException("Room not found");
+            throw new RoomNotFoundException();
         }
 
         Player leaving = room.getPlayers().stream()
@@ -447,7 +462,7 @@ public class RoomService {
                 .findFirst()
                 .orElse(null);
         if (leaving == null) {
-            throw new RuntimeException("Player not in room");
+            throw new InvalidRoomActionException("Player not in room");
         }
 
         boolean wasHost = leaving.isHost();

@@ -1,9 +1,14 @@
 package com.example.panstwamiasta.dto;
 
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+
 import java.util.UUID;
 
 public class SubmitVoteRequest {
+    @NotNull
     private UUID targetPlayerId;
+    @NotBlank
     private String category;
     private boolean isValid;
 

@@ -1,8 +1,11 @@
 package com.example.panstwamiasta.dto;
 
+import jakarta.validation.constraints.NotNull;
+
 import java.util.Map;
 
 public class SubmitAnswersRequest {
+    @NotNull
     private Map<String, String> answers;
 
     public SubmitAnswersRequest() {}

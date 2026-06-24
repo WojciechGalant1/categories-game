@@ -2,6 +2,9 @@ package com.example.panstwamiasta.model;
 
 import java.util.List;
 import jakarta.persistence.*;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Size;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
@@ -9,10 +12,19 @@ import org.hibernate.type.SqlTypes;
 public class RoomSettings {
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(columnDefinition = "jsonb")
+    @Size(min = 1)
     private List<String> categories;
 
+    @Min(1)
+    @Max(10)
     private Integer timePerRound;
+
+    @Min(1)
+    @Max(20)
     private Integer rounds;
+
+    @Min(2)
+    @Max(16)
     private Integer maxPlayers;
 
     public RoomSettings() {}
@@ -24,7 +36,6 @@ public class RoomSettings {
         this.maxPlayers = maxPlayers;
     }
 
-    // Getters and setters
     public List<String> getCategories() {
         return categories;
     }

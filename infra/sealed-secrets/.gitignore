@@ -1,0 +1,5 @@
+# Plaintext sekretów nigdy nie commitujemy
+*.plain.yaml
+*.plaintext.yaml
+
+# SealedSecret (*.sealed.yaml) SĄ bezpieczne do commitu — nie ignorujemy ich.

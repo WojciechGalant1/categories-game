@@ -2,10 +2,11 @@ package com.example.panstwamiasta.controller;
 
 import com.example.panstwamiasta.auth.PlayerPrincipal;
 import com.example.panstwamiasta.dto.*;
+import com.example.panstwamiasta.exception.RoomNotFoundException;
 import com.example.panstwamiasta.room.Room;
 import com.example.panstwamiasta.service.RoomService;
+import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -26,167 +27,90 @@ public class RoomController {
     }
 
     @PostMapping("/rooms")
-    public ResponseEntity<?> createRoom(@RequestBody CreateRoomRequest request) {
-        if (request.getNick() == null || request.getNick().trim().isEmpty()) {
-            return ResponseEntity.badRequest().body(new ApiError("Nick is required"));
-        }
-        try {
-            JoinResponse response = roomService.createRoom(request);
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(new ApiError(e.getMessage()));
-        }
+    public ResponseEntity<JoinResponse> createRoom(@Valid @RequestBody CreateRoomRequest request) {
+        return ResponseEntity.ok(roomService.createRoom(request));
     }
 
     @GetMapping("/rooms/{code}")
     @PreAuthorize("@roomAuth.isMember(#code, authentication)")
-    public ResponseEntity<?> getRoomState(@PathVariable String code) {
+    public ResponseEntity<Room> getRoomState(@PathVariable String code) {
         Room room = roomService.getRoom(code);
         if (room == null) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ApiError("Room not found"));
+            throw new RoomNotFoundException();
         }
         return ResponseEntity.ok(room);
     }
 
     @PostMapping("/rooms/{code}/join")
-    public ResponseEntity<?> joinRoom(@PathVariable String code, @RequestBody JoinRoomRequest request) {
-        if (request.getNick() == null || request.getNick().trim().isEmpty()) {
-            return ResponseEntity.badRequest().body(new ApiError("Nick is required"));
-        }
-        try {
-            JoinResponse response = roomService.joinRoom(code, request);
-            return ResponseEntity.ok(response);
-        } catch (RuntimeException e) {
-            if (e.getMessage().equals("Room not found")) {
-                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ApiError(e.getMessage()));
-            }
-            if (e.getMessage().equals("Game already started")) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(new ApiError(e.getMessage()));
-            }
-            return ResponseEntity.badRequest().body(new ApiError(e.getMessage()));
-        }
+    public ResponseEntity<JoinResponse> joinRoom(@PathVariable String code,
+                                                 @Valid @RequestBody JoinRoomRequest request) {
+        return ResponseEntity.ok(roomService.joinRoom(code, request));
     }
 
     @PostMapping("/rooms/{code}/settings")
     @PreAuthorize("@roomAuth.isHost(#code, authentication)")
-    public ResponseEntity<?> updateSettings(@PathVariable String code,
-                                            @AuthenticationPrincipal PlayerPrincipal principal,
-                                            @RequestBody UpdateSettingsRequest request) {
-        try {
-            roomService.updateSettings(code, principal.playerId(), request);
-            return ResponseEntity.ok(new SuccessResponse(true));
-        } catch (RuntimeException e) {
-            if (e.getMessage().equals("Room not found")) {
-                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ApiError(e.getMessage()));
-            }
-            return ResponseEntity.badRequest().body(new ApiError(e.getMessage()));
-        }
+    public ResponseEntity<SuccessResponse> updateSettings(@PathVariable String code,
+                                                          @AuthenticationPrincipal PlayerPrincipal principal,
+                                                          @Valid @RequestBody UpdateSettingsRequest request) {
+        roomService.updateSettings(code, principal.playerId(), request);
+        return ResponseEntity.ok(new SuccessResponse(true));
     }
 
     @PostMapping("/rooms/{code}/start")
     @PreAuthorize("@roomAuth.isHost(#code, authentication)")
-    public ResponseEntity<?> startGame(@PathVariable String code,
-                                       @AuthenticationPrincipal PlayerPrincipal principal) {
-        try {
-            roomService.startGame(code, principal.playerId());
-            return ResponseEntity.ok(new SuccessResponse(true));
-        } catch (RuntimeException e) {
-            if (e.getMessage().equals("Room not found")) {
-                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ApiError(e.getMessage()));
-            }
-            return ResponseEntity.badRequest().body(new ApiError(e.getMessage()));
-        }
+    public ResponseEntity<SuccessResponse> startGame(@PathVariable String code,
+                                                     @AuthenticationPrincipal PlayerPrincipal principal) {
+        roomService.startGame(code, principal.playerId());
+        return ResponseEntity.ok(new SuccessResponse(true));
     }
 
     @PostMapping("/rooms/{code}/stop")
     @PreAuthorize("@roomAuth.isMember(#code, authentication)")
-    public ResponseEntity<?> triggerStop(@PathVariable String code,
-                                         @AuthenticationPrincipal PlayerPrincipal principal) {
-        try {
-            roomService.triggerStop(code, principal.playerId());
-            return ResponseEntity.ok(new SuccessResponse(true));
-        } catch (RuntimeException e) {
-            if (e.getMessage().equals("Room not found")) {
-                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ApiError(e.getMessage()));
-            }
-            return ResponseEntity.badRequest().body(new ApiError(e.getMessage()));
-        }
+    public ResponseEntity<SuccessResponse> triggerStop(@PathVariable String code,
+                                                       @AuthenticationPrincipal PlayerPrincipal principal) {
+        roomService.triggerStop(code, principal.playerId());
+        return ResponseEntity.ok(new SuccessResponse(true));
     }
 
     @PostMapping("/rooms/{code}/answers")
     @PreAuthorize("@roomAuth.isMember(#code, authentication)")
-    public ResponseEntity<?> submitAnswers(@PathVariable String code,
-                                           @AuthenticationPrincipal PlayerPrincipal principal,
-                                           @RequestBody SubmitAnswersRequest request) {
-        try {
-            roomService.submitAnswers(code, principal.playerId(), request);
-            return ResponseEntity.ok(new SuccessResponse(true));
-        } catch (RuntimeException e) {
-            if (e.getMessage().equals("Room not found")) {
-                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ApiError(e.getMessage()));
-            }
-            return ResponseEntity.badRequest().body(new ApiError(e.getMessage()));
-        }
+    public ResponseEntity<SuccessResponse> submitAnswers(@PathVariable String code,
+                                                         @AuthenticationPrincipal PlayerPrincipal principal,
+                                                         @Valid @RequestBody SubmitAnswersRequest request) {
+        roomService.submitAnswers(code, principal.playerId(), request);
+        return ResponseEntity.ok(new SuccessResponse(true));
     }
 
     @PostMapping("/rooms/{code}/vote")
     @PreAuthorize("@roomAuth.isMember(#code, authentication)")
-    public ResponseEntity<?> submitVote(@PathVariable String code,
-                                        @AuthenticationPrincipal PlayerPrincipal principal,
-                                        @RequestBody SubmitVoteRequest request) {
-        try {
-            roomService.submitVote(code, principal.playerId(), request);
-            return ResponseEntity.ok(new SuccessResponse(true));
-        } catch (RuntimeException e) {
-            if (e.getMessage().equals("Room not found")) {
-                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ApiError(e.getMessage()));
-            }
-            return ResponseEntity.badRequest().body(new ApiError(e.getMessage()));
-        }
+    public ResponseEntity<SuccessResponse> submitVote(@PathVariable String code,
+                                                      @AuthenticationPrincipal PlayerPrincipal principal,
+                                                      @Valid @RequestBody SubmitVoteRequest request) {
+        roomService.submitVote(code, principal.playerId(), request);
+        return ResponseEntity.ok(new SuccessResponse(true));
     }
 
     @PostMapping("/rooms/{code}/next-round")
     @PreAuthorize("@roomAuth.isHost(#code, authentication)")
-    public ResponseEntity<?> nextRound(@PathVariable String code,
-                                       @AuthenticationPrincipal PlayerPrincipal principal) {
-        try {
-            roomService.nextRound(code, principal.playerId());
-            return ResponseEntity.ok(new SuccessResponse(true));
-        } catch (RuntimeException e) {
-            if (e.getMessage().equals("Room not found")) {
-                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ApiError(e.getMessage()));
-            }
-            return ResponseEntity.badRequest().body(new ApiError(e.getMessage()));
-        }
+    public ResponseEntity<SuccessResponse> nextRound(@PathVariable String code,
+                                                     @AuthenticationPrincipal PlayerPrincipal principal) {
+        roomService.nextRound(code, principal.playerId());
+        return ResponseEntity.ok(new SuccessResponse(true));
     }
 
     @PostMapping("/rooms/{code}/leave")
     @PreAuthorize("@roomAuth.isMember(#code, authentication)")
-    public ResponseEntity<?> leaveRoom(@PathVariable String code,
-                                       @AuthenticationPrincipal PlayerPrincipal principal) {
-        try {
-            roomService.leaveRoom(code, principal.playerId());
-            return ResponseEntity.ok(new SuccessResponse(true));
-        } catch (RuntimeException e) {
-            if (e.getMessage().equals("Room not found")) {
-                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ApiError(e.getMessage()));
-            }
-            return ResponseEntity.badRequest().body(new ApiError(e.getMessage()));
-        }
+    public ResponseEntity<SuccessResponse> leaveRoom(@PathVariable String code,
+                                                     @AuthenticationPrincipal PlayerPrincipal principal) {
+        roomService.leaveRoom(code, principal.playerId());
+        return ResponseEntity.ok(new SuccessResponse(true));
     }
 
     @PostMapping("/rooms/{code}/reset")
     @PreAuthorize("@roomAuth.isHost(#code, authentication)")
-    public ResponseEntity<?> resetToLobby(@PathVariable String code,
-                                          @AuthenticationPrincipal PlayerPrincipal principal) {
-        try {
-            roomService.resetToLobby(code, principal.playerId());
-            return ResponseEntity.ok(new SuccessResponse(true));
-        } catch (RuntimeException e) {
-            if (e.getMessage().equals("Room not found")) {
-                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(new ApiError(e.getMessage()));
-            }
-            return ResponseEntity.badRequest().body(new ApiError(e.getMessage()));
-        }
+    public ResponseEntity<SuccessResponse> resetToLobby(@PathVariable String code,
+                                                        @AuthenticationPrincipal PlayerPrincipal principal) {
+        roomService.resetToLobby(code, principal.playerId());
+        return ResponseEntity.ok(new SuccessResponse(true));
     }
 }

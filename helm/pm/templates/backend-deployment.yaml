@@ -14,6 +14,12 @@ spec:
     metadata:
       labels:
         app: backend
+      {{- if .Values.metrics.annotations.enabled }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.backend.managementPort | quote }}
+        prometheus.io/path: /actuator/prometheus
+      {{- end }}
     spec:
       {{- with .Values.global.imagePullSecrets }}
       imagePullSecrets:
@@ -21,13 +27,24 @@ spec:
         - name: {{ . }}
         {{- end }}
       {{- end }}
+      {{- with .Values.backend.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.backend.terminationGracePeriodSeconds }}
       containers:
         - name: backend
           image: {{ include "pm.image" (dict "image" .Values.backend.image "registry" .Values.global.appImageRegistry) }}
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          {{- with .Values.backend.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - containerPort: {{ .Values.backend.serverPort }}
               name: http
+            - containerPort: {{ .Values.backend.managementPort }}
+              name: management
           envFrom:
             - configMapRef:
                 name: backend-config
@@ -59,21 +76,36 @@ spec:
                   name: {{ .Values.redisHA.auth.existingSecret }}
                   key: {{ .Values.redisHA.auth.existingSecretPasswordKey }}
             {{- end }}
-          readinessProbe:
+          startupProbe:
             httpGet:
-              path: /api/health
-              port: {{ .Values.backend.serverPort }}
-            initialDelaySeconds: 25
+              path: /actuator/health/liveness
+              port: management
             periodSeconds: 5
             timeoutSeconds: 3
-            failureThreshold: 12
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: management
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
           livenessProbe:
             httpGet:
-              path: /api/health
-              port: {{ .Values.backend.serverPort }}
-            initialDelaySeconds: 60
+              path: /actuator/health/liveness
+              port: management
             periodSeconds: 15
             timeoutSeconds: 3
             failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 5"]
           resources:
             {{- toYaml .Values.backend.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

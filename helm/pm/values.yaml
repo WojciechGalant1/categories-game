@@ -58,8 +58,25 @@ backend:
     repository: pm-backend
     tag: "3.2-auth"
     digest: ""             # np. sha256:...; ustawione => priorytet nad tag
+  springProfile: ""        # "" = dev (defaulty OK); "prod" aktywuje fail-fast guard na sekretach
   replicas: 2
   serverPort: 3000
+  managementPort: 9090     # Actuator (health/prometheus) na osobnym porcie, poza ingress
+  logging:
+    structuredFormat: ""   # "" = czytelny tekst (dev); "ecs" = strukturalne logi JSON (prod)
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
   service:
     port: 3000
   hikari:
@@ -77,8 +94,16 @@ backend:
   jwt:
     secretName: backend-secrets
     expiryHours: 24
+  cors:
+    allowedOrigins: "*"
   ws:
     subscribeTimeoutSeconds: 10
+    allowedOrigins: "*"
+  rateLimit:
+    enabled: true
+    capacity: 20
+    refillPeriodSeconds: 60
+  terminationGracePeriodSeconds: 40
 
 frontend:
   image:
@@ -88,6 +113,17 @@ frontend:
   replicas: 2
   service:
     port: 80
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 101
+    runAsGroup: 101
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
   resources:
     requests:
       cpu: "50m"
@@ -154,3 +190,37 @@ hpa:
     averageUtilization: 70
   memory:
     enabled: false
+
+# Pod Security Standards (etykiety PSA na namespace tworzonym przez chart).
+# enforce=baseline jest bezpieczne dla CNPG i Bitnami Redis; restricted leci jako warn/audit.
+podSecurity:
+  enabled: true
+  enforce: baseline
+  warn: restricted
+  audit: restricted
+
+# Metryki Prometheus. Oba mechanizmy domyślnie off (dev). ServiceMonitor wymaga
+# Prometheus Operatora; adnotacje działają z Prometheusem bez operatora.
+metrics:
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}             # np. release: kube-prometheus-stack (selekcja przez Prometheusa)
+  annotations:
+    enabled: false
+
+# PodDisruptionBudget warstwy aplikacji (CNPG/Redis HA mają własne).
+pdb:
+  enabled: true
+  backend:
+    maxUnavailable: 1
+  frontend:
+    maxUnavailable: 1
+
+# NetworkPolicies (default-deny + allow-list). Domyślnie off — standardowy CNI
+# minikube nie egzekwuje polityk (wymaga np. --cni=calico). Włącz w prod.
+networkPolicy:
+  enabled: false
+  ingressNamespace: ingress-nginx      # etykieta kubernetes.io/metadata.name namespace kontrolera ingress
+  cnpgOperatorNamespace: cnpg-system    # namespace operatora CloudNativePG
+  monitoringNamespace: monitoring       # namespace Prometheusa (scrape portu management)

@@ -312,6 +312,8 @@ kubectl create secret generic backend-secrets \
   -n pm-app --dry-run=client -o yaml | kubectl apply -f -
 ```
 
+> Zamiast tworzyć sekrety pojedynczo, możesz użyć skryptu bootstrap [`scripts/create-secrets.sh`](scripts/create-secrets.sh) (zob. [Sekrety](#sekrety)).
+
 ### Wdrożenie Helm chart
 
 Używaj **`helm upgrade --install`** — tworzy release przy pierwszym uruchomieniu i aktualizuje przy kolejnych.
@@ -457,6 +459,17 @@ Parametry bazowe: [`helm/pm/values.yaml`](helm/pm/values.yaml). Override minikub
 | Routing / host              | `values.yaml` → `ingress.host`                                                             | `pm.local`, `/api` → backend, `/` → frontend           |
 | TLS / HTTPS                 | `values.yaml` → `ingress.tls.*` (prod: `values-prod.yaml`)                                  | wyłączone (dev HTTP); prod: cert-manager + `letsencrypt-prod` |
 | Redis                       | `values.yaml` → `redis.*` (dev) / `redisHA.*` (prod, Bitnami Sentinel)                       | dev: pojedynczy `redis:7-alpine`; prod: HA Sentinel (3 węzły) |
+| Profil Spring / guard       | `values.yaml` → `backend.springProfile` (prod: `values-prod.yaml`)                          | `""` (dev); `prod` aktywuje fail-fast guard na sekretach |
+| Sekrety                     | `scripts/create-secrets.sh` (dev) / `infra/sealed-secrets/` (prod)                          | bootstrap kubectl; prod: Sealed Secrets               |
+| Pod Security (PSA)          | `values.yaml` → `podSecurity.*`                                                             | enforce `baseline`, warn/audit `restricted`           |
+| NetworkPolicies             | `values.yaml` → `networkPolicy.*` (prod: `values-prod.yaml`)                                | wyłączone (dev/minikube); prod: default-deny + allow-list |
+| Actuator / port management  | `values.yaml` → `backend.managementPort`                                                    | `9090` (health groups + `/actuator/prometheus`)       |
+| Metryki Prometheus          | `values.yaml` → `metrics.serviceMonitor.*`, `metrics.annotations.*` (prod: `values-prod.yaml`) | off (dev); prod: ServiceMonitor                       |
+| Logi strukturalne (JSON)    | `values.yaml` → `backend.logging.structuredFormat`                                          | `""` tekst (dev); `ecs` (prod)                         |
+| PDB app-tier                | `values.yaml` → `pdb.*`                                                                     | włączone, `maxUnavailable: 1` (backend, frontend)     |
+| CORS / WS originy           | `values.yaml` → `backend.cors.allowedOrigins`, `backend.ws.allowedOrigins`                  | `*` (dev); prod: `https://pm.example.com`              |
+| Rate limiting (Redis)       | `values.yaml` → `backend.rateLimit.*`                                                       | włączone, 20 req / 60s na IP (create/join)             |
+| Graceful shutdown           | `values.yaml` → `backend.terminationGracePeriodSeconds`                                     | 40s + preStop sleep 5                                  |
 
 ## Helm Chart
 
@@ -469,11 +482,14 @@ Chart [`helm/pm/`](helm/pm/) pakuje wszystkie zasoby Kubernetes aplikacji:
 - **values-prod.yaml** — prod: Barman backup, `primaryUpdateStrategy: supervised`, wyższe resources, TLS (cert-manager), Redis HA
 - **templates/** — szablony Go Template generujące manifesty:
   - `backend-deployment.yaml`, `backend-service.yaml` — Spring Boot + HikariCP, JWT secret, probe `/api/health`
-  - `frontend-deployment.yaml`, `frontend-service.yaml` — nginx + statyczny build Vite
+  - `frontend-deployment.yaml`, `frontend-service.yaml` — nginx unprivileged (port 8080, non-root) + statyczny build Vite
   - `postgres-cluster.yaml`, `postgres-pdb.yaml`, `postgres-objectstore.yaml`, `postgres-scheduledbackup.yaml` — CloudNativePG (tryb `cnpg`)
   - `postgres-statefulset.yaml`, `postgres-service.yaml` — legacy StatefulSet (tryb `legacy`)
   - `redis-deployment.yaml`, `redis-service.yaml` — dev: pojedynczy Redis
-  - `ingress.yaml`, `hpa.yaml`, `configmap.yaml`, `secret.yaml`, `namespace.yaml`, `_helpers.tpl`, `NOTES.txt`
+  - `networkpolicies.yaml` — default-deny + allow-list (flaga `networkPolicy.enabled`)
+  - `servicemonitor.yaml` — Prometheus ServiceMonitor (flaga `metrics.serviceMonitor.enabled`)
+  - `app-pdb.yaml` — PDB backend/frontend (flaga `pdb.enabled`)
+  - `ingress.yaml`, `hpa.yaml`, `configmap.yaml`, `secret.yaml`, `namespace.yaml` (etykiety PSA), `_helpers.tpl`, `NOTES.txt`
 
 Secret Postgres **nie jest** w repozytorium — tworzony ręcznie przed wdrożeniem. Opcjonalnie `postgres.credentials.create: true` + `--set postgres.credentials.user=... --set postgres.credentials.password=...` tylko na lokalny dev (nie commitować haseł).
 
@@ -625,6 +641,58 @@ Dzięki temu backend można skalować (HPA 2–10 replik) bez podwójnego auto-s
 - Konfiguracja: `APP_ROOM_TTL_LOBBY_SECONDS`, `APP_ROOM_TTL_IN_GAME_SECONDS` w ConfigMap (domyślnie 180 / 600).
 - Event `expired` może przyjść z lekkim opóźnieniem (lazy expiration).
 
+## Observability
+
+Backend wystawia **Spring Boot Actuator** na **dedykowanym porcie zarządzania `9090`** (osobny od portu aplikacji `3000`, poza routingiem ingress — nieosiągalny publicznie). Endpointy: `health`, `info`, `prometheus`.
+
+**Health groups (deep health + probes).** `management.endpoint.health.probes.enabled=true` daje dwie grupy:
+
+- `/actuator/health/liveness` — płytka (`livenessState`); blip bazy/Redisa **nie** zabija poda.
+- `/actuator/health/readiness` — głęboka (`readinessState` + `db` + `redis`); gdy baza lub Redis są niedostępne, pod wychodzi z rotacji Service.
+
+Probes Kubernetes ([`backend-deployment.yaml`](helm/pm/templates/backend-deployment.yaml)) celują w port `management`:
+
+- `startupProbe` → `/actuator/health/liveness` (`failureThreshold: 30 × 5s` = do ~150s na start JVM/Flyway; zastępuje długie `initialDelaySeconds`),
+- `livenessProbe` → `/actuator/health/liveness`,
+- `readinessProbe` → `/actuator/health/readiness`.
+
+Endpoint `/api/health` zostaje dla kompatybilności wstecznej. Dostęp do Actuatora jest jawnie `permitAll()` w `SecurityConfig` (`EndpointRequest.toAnyEndpoint()`).
+
+**Metryki Prometheus.** `/actuator/prometheus` (Micrometer). Dwa niezależne, domyślnie wyłączone mechanizmy (`metrics.*`):
+
+- `metrics.serviceMonitor.enabled` → `ServiceMonitor` (CRD `monitoring.coreos.com/v1`, wymaga Prometheus Operatora; ustaw `metrics.serviceMonitor.labels` pod swój release Prometheusa),
+- `metrics.annotations.enabled` → adnotacje `prometheus.io/scrape|port|path` na podzie (Prometheus bez operatora).
+
+Gdy którykolwiek jest włączony, polityka sieciowa backendu otwiera port `9090` dla namespace monitoringu (`networkPolicy.monitoringNamespace`).
+
+**Logi.** Strukturalne logi JSON sterowane `backend.logging.structuredFormat` (puste = czytelny tekst w dev; `ecs` w prod). Wbudowane w Spring Boot (`logging.structured.format.console`), wypisywane na stdout — zbiera je kolektor (Loki/ELK/Fluent Bit).
+
+**Dostępność (PDB app-tier).** [`app-pdb.yaml`](helm/pm/templates/app-pdb.yaml) (`pdb.enabled`, domyślnie `true`) tworzy PDB dla `backend` i `frontend` (`maxUnavailable: 1`), chroniąc przed jednoczesnym ubytkiem wszystkich replik podczas drenażu węzłów. CNPG i Redis HA mają własne PDB.
+
+## Hardening backendu
+
+Warstwa API została utwardzona pod kątem produkcji:
+
+**Globalna obsługa błędów.** `@RestControllerAdvice` (`GlobalExceptionHandler`) mapuje typowane wyjątki na spójne odpowiedzi `ApiError` (pole `error` — kompatybilność z frontem):
+- `RoomNotFoundException` → 404,
+- `GameAlreadyStartedException` → 403,
+- `InvalidRoomActionException` → 400,
+- błędy walidacji Bean Validation → 400,
+- `OptimisticLockingFailureException` (po wyczerpaniu retry) → 409,
+- nieobsłużone → 500 (bez wycieku stacktrace).
+
+Kontroler nie zawiera już bloków `try/catch` ani ręcznego sprawdzania nicka.
+
+**Optimistic locking.** Encja `Room` ma `@Version`; migracja Flyway `V3__rooms_optimistic_lock.sql` dodaje kolumnę `version`. Mutujące metody `RoomService` mają `@Retryable` (max 3 próby, backoff 50 ms) — konflikt wersji jest przezroczysty dla klienta.
+
+**Walidacja wejścia.** Bean Validation na DTO (`@NotBlank`, `@Size`, `@Min`/`@Max`) + `@Valid` w kontrolerze. Nick max 30 znaków; ustawienia pokoju mają sensowne limity (rundy 1–20, gracze 2–16 itd.).
+
+**Rate limiting (Redis).** Bucket4j + Lettuce, rozproszony przez Redis (standalone dev / Sentinel prod). Dotyczy publicznych `POST /api/rooms` i `POST /api/rooms/{code}/join`; klucz = IP z `X-Forwarded-For`. Przekroczenie limitu → 429 `Too many requests`. Konfiguracja: `backend.rateLimit.*` (`capacity`, `refillPeriodSeconds`, `enabled`).
+
+**Graceful shutdown.** `server.shutdown=graceful` + `spring.lifecycle.timeout-per-shutdown-phase=30s`; w K8s `terminationGracePeriodSeconds: 40` i `preStop sleep 5` na deregistrację endpointów przed zamknięciem JVM.
+
+**Originy CORS/WebSocket.** Zamiast twardego `*`: `backend.cors.allowedOrigins` (HTTP API) i `backend.ws.allowedOrigins` (WebSocket). Dev: `*`; prod: `https://pm.example.com` (PODMIEŃ na właściwą domenę).
+
 ## Produkcja
 
 ### TLS / cert-manager
@@ -752,6 +820,89 @@ kubectl logs -n pm-app deploy/backend -f | grep -i "sentinel\|master"
 ```
 
 > Uwaga o obrazach Bitnami: od 2025 część publicznych obrazów Bitnami przeniesiono (model "Bitnami Secure Images"). Jeśli pull `bitnami/redis` zawiedzie, nadpisz `redisHA.image.registry`/`redisHA.image.repository` (np. `bitnamilegacy`) lub własny mirror.
+
+### Bezpieczeństwo: NetworkPolicies + Pod Security + non-root
+
+Trzy warstwy hardeningu warstwy aplikacji (backend/frontend), domyślnie bezpieczne dla dev:
+
+**Obrazy non-root.** Backend (`eclipse-temurin`) dostaje użytkownika `USER 10001`; frontend używa bazy `nginxinc/nginx-unprivileged` i nasłuchuje na **porcie 8080** (zamiast 80). Po tej zmianie obrazy trzeba przebudować, a w prod wygenerować nowe digesty (`backend.image.digest`, `frontend.image.digest` w `values-prod.yaml`).
+
+```bash
+# minikube (demon dockera minikube)
+eval $(minikube docker-env)
+docker build -t pm-backend:3.3-sec  ./backend
+docker build -t pm-frontend:1.2-sec ./frontend
+# prod (GHCR) — po push odczytaj digest i wpisz do values-prod.yaml
+docker buildx imagetools inspect ghcr.io/OWNER/pm-frontend:TAG --format '{{ "{{" }}.Manifest.Digest{{ "}}" }}'
+```
+
+**securityContext (restricted).** Każdy pod app-tier startuje jako non-root z `seccompProfile: RuntimeDefault`, `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`. Backend ma dodatkowo `readOnlyRootFilesystem: true` z `emptyDir` zamontowanym na `/tmp` (JVM). Parametry w `backend.podSecurityContext`/`backend.containerSecurityContext` i odpowiednikach `frontend.*`.
+
+**Pod Security Admission (PSA).** Namespace dostaje etykiety `pod-security.kubernetes.io/{enforce,warn,audit}`. Domyślnie `enforce: baseline` (bezpieczne dla podów CNPG i Bitnami Redis), a `restricted` leci jako `warn`/`audit` — czyli ostrzeżenia bez blokowania. Konfiguracja w `podSecurity.*`. Gdy `namespace.create: false` (minikube), etykiety trzeba nałożyć ręcznie:
+
+```bash
+kubectl label ns pm-app \
+  pod-security.kubernetes.io/enforce=baseline \
+  pod-security.kubernetes.io/warn=restricted \
+  pod-security.kubernetes.io/audit=restricted --overwrite
+```
+
+**NetworkPolicies (default-deny + allow-list).** Włączane flagą `networkPolicy.enabled` (prod: `true`). Polityka `default-deny` blokuje cały ruch, a kolejne reguły otwierają tylko:
+
+- DNS (wszystkie pody → kube-dns),
+- frontend ← kontroler ingress (`:8080`),
+- backend ← kontroler ingress (`:3000`), backend → Postgres (`:5432`) i Redis (`:6379`/`:26379`),
+- CNPG ← backend + replikacja wewnątrz klastra + operator (`networkPolicy.cnpgOperatorNamespace`),
+- Redis ← backend + (HA) ruch Sentinel wewnątrz klastra.
+
+Namespace kontrolera ingress dopasowywany etykietą `kubernetes.io/metadata.name` (`networkPolicy.ingressNamespace`, domyślnie `ingress-nginx`).
+
+> Uwaga: NetworkPolicy egzekwuje dopiero CNI je wspierające. Domyślny CNI minikube ich **nie** egzekwuje — uruchom klaster z `minikube start --cni=calico`, by polityki działały. Stąd flaga domyślnie wyłączona dla dev.
+
+## Sekrety
+
+Aplikacja używa sekretów: `postgres-credentials`, `backend-secrets` (`JWT_SECRET`), `redis-credentials` (tylko gdy Redis ma auth), `ghcr-pull` (pull obrazów), `pm-postgres-s3-credentials` (backup Barman). Żaden plaintext nie trafia do repo.
+
+### Fail-fast guard na domyślnych sekretach
+
+[`ProductionSecretsGuard`](backend/src/main/java/com/example/panstwamiasta/config/ProductionSecretsGuard.java) jest aktywny pod profilem Spring **`prod`** (ustawianym przez `backend.springProfile: prod` w [`values-prod.yaml`](helm/pm/values-prod.yaml) → `SPRING_PROFILES_ACTIVE`). Przerywa start poda, jeśli wykryje:
+
+- `app.jwt.secret` równy wbudowanemu defaultowi dev,
+- `spring.datasource.password` pusty lub znany default (`postgres`, `pmpass`).
+
+Dev/minikube (`backend.springProfile: ""`) działa dalej na defaultach — guard jest nieaktywny.
+
+### Bootstrap (dev / lab)
+
+[`scripts/create-secrets.sh`](scripts/create-secrets.sh) tworzy wszystkie sekrety idempotentnie (`kubectl apply` z dry-run):
+
+```bash
+PG_USER=pm PG_PASSWORD='...' \
+  ./scripts/create-secrets.sh
+# opcjonalnie:
+#   REDIS_AUTH=true REDIS_PASSWORD='...'        - gdy Redis ma auth (redisHA)
+#   GITHUB_TOKEN=... GITHUB_USER=...            - ghcr-pull
+#   S3_ACCESS_KEY_ID=... S3_SECRET_ACCESS_KEY=... - backup Barman
+```
+
+### Sealed Secrets (produkcja / GitOps)
+
+Na produkcji preferuj **Sealed Secrets** — zaszyfrowane `*.sealed.yaml` można bezpiecznie trzymać w git, a kontroler w klastrze odszyfrowuje je do natywnych Secretów.
+
+```bash
+# 1. Kontroler w klastrze (jednorazowo)
+helm repo add sealed-secrets https://bitnami-labs.github.io/sealed-secrets
+helm install sealed-secrets sealed-secrets/sealed-secrets -n kube-system
+
+# 2. CLI kubeseal: https://github.com/bitnami-labs/sealed-secrets#kubeseal
+
+# 3. Wygeneruj zaszyfrowane manifesty (plaintext z env, nie z repo)
+JWT_SECRET='...' PG_USER=pm PG_PASSWORD='...' REDIS_PASSWORD='...' \
+  ./infra/sealed-secrets/seal.sh
+
+# 4. Zacommituj i zaaplikuj
+kubectl apply -f infra/sealed-secrets/
+```
 
 ### Backupy
 

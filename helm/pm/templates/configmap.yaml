@@ -4,12 +4,24 @@ metadata:
   name: backend-config
   namespace: {{ include "pm.namespace" . }}
 data:
+  {{- with .Values.backend.springProfile }}
+  SPRING_PROFILES_ACTIVE: {{ . | quote }}
+  {{- end }}
   SERVER_PORT: {{ .Values.backend.serverPort | quote }}
+  MANAGEMENT_SERVER_PORT: {{ .Values.backend.managementPort | quote }}
+  {{- with .Values.backend.logging.structuredFormat }}
+  LOGGING_STRUCTURED_FORMAT_CONSOLE: {{ . | quote }}
+  {{- end }}
   SPRING_DATASOURCE_URL: {{ include "pm.postgres.jdbcUrl" . | quote }}
   SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: {{ .Values.backend.hikari.maximumPoolSize | quote }}
   FLYWAY_BASELINE_ON_MIGRATE: {{ .Values.postgres.flyway.baselineOnMigrate | quote }}
   JWT_EXPIRY_HOURS: {{ .Values.backend.jwt.expiryHours | quote }}
   WS_SUBSCRIBE_TIMEOUT_SECONDS: {{ .Values.backend.ws.subscribeTimeoutSeconds | quote }}
+  APP_CORS_ALLOWED_ORIGINS: {{ .Values.backend.cors.allowedOrigins | quote }}
+  APP_WS_ALLOWED_ORIGINS: {{ .Values.backend.ws.allowedOrigins | quote }}
+  APP_RATE_LIMIT_ENABLED: {{ .Values.backend.rateLimit.enabled | quote }}
+  APP_RATE_LIMIT_CAPACITY: {{ .Values.backend.rateLimit.capacity | quote }}
+  APP_RATE_LIMIT_REFILL_PERIOD_SECONDS: {{ .Values.backend.rateLimit.refillPeriodSeconds | quote }}
   {{- if .Values.redisHA.enabled }}
   SPRING_DATA_REDIS_SENTINEL_MASTER: {{ .Values.redisHA.sentinel.masterSet | quote }}
   SPRING_DATA_REDIS_SENTINEL_NODES: "{{ .Values.redisHA.fullnameOverride }}:26379"

@@ -5,4 +5,9 @@ metadata:
   name: {{ include "pm.namespace" . }}
   labels:
     name: {{ include "pm.namespace" . }}
+    {{- if .Values.podSecurity.enabled }}
+    pod-security.kubernetes.io/enforce: {{ .Values.podSecurity.enforce }}
+    pod-security.kubernetes.io/warn: {{ .Values.podSecurity.warn }}
+    pod-security.kubernetes.io/audit: {{ .Values.podSecurity.audit }}
+    {{- end }}
 {{- end }}

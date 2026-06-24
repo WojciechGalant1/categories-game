@@ -8,6 +8,13 @@ backend:
   image:
     repository: pm-backend
     digest: "sha256:REPLACE_WITH_BACKEND_DIGEST"
+  springProfile: prod          # aktywuje ProductionSecretsGuard (fail-fast na domyślnych sekretach)
+  logging:
+    structuredFormat: ecs      # strukturalne logi JSON (ECS) do zbierania przez kolektor
+  cors:
+    allowedOrigins: "https://pm.example.com"   # PODMIEŃ na właściwą domenę produkcyjną
+  ws:
+    allowedOrigins: "https://pm.example.com"   # PODMIEŃ na właściwą domenę produkcyjną
 
 frontend:
   image:
@@ -19,6 +26,13 @@ redis:
 
 redisHA:
   enabled: true
+
+metrics:
+  serviceMonitor:
+    enabled: true              # prod: scrape przez Prometheus Operator (ustaw labels pod swój release)
+
+networkPolicy:
+  enabled: true                # prod: egzekwuj default-deny + allow-list (wymaga CNI z obsługą NetworkPolicy)
 
 ingress:
   host: pm.example.com         # PODMIEŃ na właściwą domenę produkcyjną

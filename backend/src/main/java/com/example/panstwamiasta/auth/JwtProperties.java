@@ -7,7 +7,9 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "app.jwt")
 public class JwtProperties {
 
-    private String secret = "change-me-in-dev-only-must-be-at-least-32-chars";
+    public static final String DEFAULT_DEV_SECRET = "change-me-in-dev-only-must-be-at-least-32-chars";
+
+    private String secret = DEFAULT_DEV_SECRET;
     private int expiryHours = 24;
 
     public String getSecret() {
