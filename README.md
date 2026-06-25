@@ -16,7 +16,11 @@ Multiplayerowa gra słowna wdrożona na Kubernetes przy użyciu Helm.
 - [API i autoryzacja](#api-i-autoryzacja)
 - [PostgreSQL (CloudNativePG)](#postgresql-cloudnativepg)
 - [Skalowanie i synchronizacja stanu](#skalowanie-i-synchronizacja-stanu)
+- [Observability](#observability)
+- [Hardening backendu](#hardening-backendu)
+- [Hardening frontendu](#hardening-frontendu)
 - [Produkcja](#produkcja)
+- [Sekrety](#sekrety)
 - [Diagnostyka](#diagnostyka)
 - [Ograniczenia](#ograniczenia)
 
@@ -36,9 +40,13 @@ Multiplayerowa gra słowna wdrożona na Kubernetes przy użyciu Helm.
 - JWT bez rejestracji użytkowników
 - WebSocket do synchronizacji stanu
 - Redis Pub/Sub między replikami backendu
-- PostgreSQL CloudNativePG (HA-ready)
-- Helm deployment
-- HPA (2–10 replik)
+- PostgreSQL CloudNativePG (HA-ready, backup Barman w prod)
+- Helm deployment + HPA (2–10 replik backendu)
+- Actuator (health, Prometheus) na dedykowanym porcie zarządzania
+- Rate limiting create/join (Redis + Bucket4j)
+- NetworkPolicies i Pod Security (prod)
+- TLS przez cert-manager + Let's Encrypt (prod)
+- Obrazy non-root, pinowanie digestów w GHCR (prod)
 
 ## Architektura
 
@@ -54,7 +62,7 @@ flowchart TD
     end
 
     subgraph Frontend
-        feDep[Frontend Deployment<br/>2 repliki<br/>Nginx + Vite]
+        feDep[Frontend Deployment<br/>2 repliki<br/>nginx :8080 + Vite]
     end
 
     subgraph Backend
@@ -90,7 +98,7 @@ Frontend komunikuje się z backendem przez **relatywny** prefix `/api` (zob. [`f
 
 | Komponent | Technologia |
 | --------- | ----------- |
-| Frontend | React 19 + Vite + Tailwind + nginx |
+| Frontend | React 19 + Vite + Tailwind + nginx unprivileged (port 8080) |
 | Backend | Spring Boot 4 (Java 21) + Spring Data JPA + Flyway |
 | Baza | PostgreSQL 16 (CloudNativePG Cluster, 3 instancje) |
 | Redis | redis:7-alpine (dev) / Bitnami Sentinel (prod) |
@@ -125,57 +133,65 @@ Pliki umieść w katalogu `docs/screenshots/` (commitowane do repozytorium).
 ├── backend/                          # Spring Boot 4 (Java 21) + JPA + Flyway + JWT + WebSocket
 │   ├── src/main/java/com/example/panstwamiasta/
 │   │   ├── auth/                     # JWT, filtry, autoryzacja pokoju
-│   │   ├── config/                   # Security, Redis, WebSocket, Jackson
+│   │   ├── config/                   # Security, Redis, rate limit, ProductionSecretsGuard
 │   │   ├── controller/               # REST API (health, rooms)
-│   │   ├── dto/                      # Request/response DTO
+│   │   ├── dto/                      # Request/response DTO (+ Bean Validation)
+│   │   ├── exception/                # GlobalExceptionHandler, typowane wyjątki (404/403/400)
 │   │   ├── model/                    # Encje JPA (Player, GameState, RoomSettings)
 │   │   ├── repository/               # Spring Data JPA
-│   │   ├── room/                     # Encja Room
+│   │   ├── room/                     # Encja Room (@Version optimistic locking)
 │   │   ├── scheduler/                # Auto-stop rund (roundEndsAt)
 │   │   ├── service/                  # Logika pokoi, TTL, broadcast, cleanup
 │   │   └── websocket/                # WebSocket handler + rejestr sesji
 │   ├── src/main/resources/
 │   │   ├── application.properties
-│   │   └── db/migration/             # Flyway (V1__initial_schema, V2__players_fk_cascade)
+│   │   └── db/migration/             # Flyway V1–V3
 │   ├── src/test/java/                # Testy (auth, security, kontekst Spring)
 │   ├── pom.xml
 │   ├── Dockerfile
 │   ├── openapi.yaml
 │   └── mvnw                          # Maven wrapper
-├── frontend/                         # React 19 + Vite + Tailwind + nginx
+├── frontend/                         # React 19 + Vite + Tailwind + nginx unprivileged
 │   ├── src/
 │   │   ├── components/
 │   │   │   ├── game/                 # AnswerForm, GameHeader, Leaderboard, ReviewPanel
 │   │   │   └── room/                 # PlayerList, RoomSettings, LeaveRoomButton
 │   │   ├── pages/                    # Home, Room, Game
-│   │   ├── hooks/                    # useRoomWebSocket
-│   │   ├── services/                 # api.ts (REST + Bearer JWT)
+│   │   ├── hooks/                    # useRoomWebSocket, useWebSocketSync, useGameActions, useGameTimer
+│   │   ├── services/                 # api.ts (REST + authFetch), errors.ts (ApiHttpError)
 │   │   └── constants/                # game.ts
 │   ├── public/                       # favicon, ikony SVG
-│   ├── Dockerfile
-│   ├── nginx.conf
-│   └── package.json
+│   ├── Dockerfile                    # npm ci + multi-stage build
+│   ├── nginx.conf                    # CSP, nagłówki bezpieczeństwa, gzip, cache
+│   ├── package.json
+│   └── package-lock.json
 ├── helm/pm/                          # Helm chart aplikacji
 │   ├── Chart.yaml                    # zależność: Bitnami redis (redisHA, prod)
 │   ├── Chart.lock
 │   ├── charts/                       # redis-23.1.1.tgz (po helm dependency build)
 │   ├── values.yaml                   # domyślne wartości
 │   ├── values-minikube.yaml          # override dev (imagePullPolicy: Never)
-│   ├── values-prod.yaml              # prod (TLS, Barman, Redis HA)
+│   ├── values-prod.yaml              # prod (TLS, Barman, Redis HA, digesty GHCR)
 │   └── templates/
-│       ├── backend-*.yaml            # Deployment + Service
-│       ├── frontend-*.yaml           # Deployment + Service
+│       ├── backend-*.yaml            # Deployment + Service (Actuator :9090)
+│       ├── frontend-*.yaml           # Deployment + Service (nginx :8080)
 │       ├── postgres-*.yaml           # CNPG Cluster, PDB, backup, legacy StatefulSet
 │       ├── redis-*.yaml              # dev: pojedynczy redis:7-alpine
+│       ├── networkpolicies.yaml      # default-deny + allow-list (flaga networkPolicy)
+│       ├── servicemonitor.yaml       # Prometheus ServiceMonitor (flaga metrics)
+│       ├── app-pdb.yaml              # PDB backend/frontend
 │       ├── ingress.yaml
 │       ├── hpa.yaml
 │       ├── configmap.yaml
 │       ├── secret.yaml
-│       └── namespace.yaml
+│       └── namespace.yaml            # etykiety Pod Security Admission
+├── scripts/
+│   └── create-secrets.sh             # bootstrap sekretów (dev/lab)
 ├── infra/
-│   └── cert-manager/                 # ClusterIssuery (staging + prod) — poza chartem
-│       ├── clusterissuer-staging.yaml
-│       └── clusterissuer-prod.yaml
+│   ├── cert-manager/                 # ClusterIssuery (staging + prod) — poza chartem
+│   │   ├── clusterissuer-staging.yaml
+│   │   └── clusterissuer-prod.yaml
+│   └── sealed-secrets/               # seal.sh + *.sealed.yaml (prod / GitOps)
 └── docs/
     └── screenshots/                  # zrzuty ekranu aplikacji i klastra (README)
 ```
@@ -186,7 +202,7 @@ Pliki umieść w katalogu `docs/screenshots/` (commitowane do repozytorium).
 - Minikube >= 1.38
 - Helm >= 3.x
 - kubectl
-- Lokalnie do dev: JDK 21 + Maven (lub `./mvnw`), Node.js 18+ i npm dla frontendu
+- Lokalnie do dev: JDK 21 + Maven (lub `./mvnw`), Node.js 20 i npm dla frontendu (zgodnie z `node:20-alpine` w Dockerfile)
 
 Komendy Helm uruchamiaj z katalogu głównego projektu. Chart podawaj jako **`./helm/pm`** (z `./`) — inaczej Helm interpretuje `helm/pm` jako repozytorium `helm` i chart `pm` → błąd `repo helm not found`.
 
@@ -417,12 +433,28 @@ Aplikacja w przeglądarce: <http://pm.local>
 
 ### Rebuild po zmianach kodu
 
+Obrazy buduj w **demonie Dockera minikube** (nie w domyślnym Dockerze hosta), z tagami zgodnymi z `helm/pm/values.yaml`:
+
 ```bash
-eval $(minikube docker-env)
+eval $(minikube -p minikube docker-env --shell bash)
 docker build -t pm-backend:3.2-auth backend/
-docker build -t pm-frontend:1.1-auth frontend/   # po zmianach frontendu
+docker build -t pm-frontend:1.1-auth frontend/
+```
+
+Po rebuildzie wymuś restart podów — przy tym samym tagu Kubernetes nie przeładuje obrazu automatycznie (`imagePullPolicy: Never`):
+
+```bash
 helm upgrade --install pm ./helm/pm -n pm-app \
   -f helm/pm/values.yaml -f helm/pm/values-minikube.yaml
+
+kubectl rollout restart deployment/frontend deployment/backend -n pm-app
+kubectl rollout status deployment/frontend -n pm-app
+```
+
+Szybka weryfikacja po zmianach frontendu (nagłówki nginx):
+
+```bash
+curl -sI http://pm.local/ | grep -iE "content-security|x-frame|cache-control"
 ```
 
 ### Sprzątanie
@@ -471,7 +503,7 @@ Parametry bazowe: [`helm/pm/values.yaml`](helm/pm/values.yaml). Override minikub
 | Rate limiting (Redis)       | `values.yaml` → `backend.rateLimit.*`                                                       | włączone, 20 req / 60s na IP (create/join)             |
 | Graceful shutdown           | `values.yaml` → `backend.terminationGracePeriodSeconds`                                     | 40s + preStop sleep 5                                  |
 | Frontend nginx (CSP/headers)| [`frontend/nginx.conf`](frontend/nginx.conf)                                                | CSP, X-Frame-Options, gzip, cache statyków             |
-| Frontend auth errors        | [`frontend/src/services/api.ts`](frontend/src/services/api.ts)                              | 401 rejoin+retry, 403 alert                              |
+| Frontend auth errors        | [`frontend/src/services/api.ts`](frontend/src/services/api.ts), [`errors.ts`](frontend/src/services/errors.ts) | 401 rejoin+retry, 403 alert                              |
 
 ## Helm Chart
 
@@ -483,7 +515,7 @@ Chart [`helm/pm/`](helm/pm/) pakuje wszystkie zasoby Kubernetes aplikacji:
 - **values-minikube.yaml** — override minikube: `imagePullPolicy: Never`, `namespace.create: false`
 - **values-prod.yaml** — prod: Barman backup, `primaryUpdateStrategy: supervised`, wyższe resources, TLS (cert-manager), Redis HA
 - **templates/** — szablony Go Template generujące manifesty:
-  - `backend-deployment.yaml`, `backend-service.yaml` — Spring Boot + HikariCP, JWT secret, probe `/api/health`
+  - `backend-deployment.yaml`, `backend-service.yaml` — Spring Boot + HikariCP, JWT secret, probes Actuator na porcie `management` (`9090`)
   - `frontend-deployment.yaml`, `frontend-service.yaml` — nginx unprivileged (port 8080, non-root) + statyczny build Vite
   - `postgres-cluster.yaml`, `postgres-pdb.yaml`, `postgres-objectstore.yaml`, `postgres-scheduledbackup.yaml` — CloudNativePG (tryb `cnpg`)
   - `postgres-statefulset.yaml`, `postgres-service.yaml` — legacy StatefulSet (tryb `legacy`)
@@ -516,7 +548,7 @@ Przy **create/join** backend zwraca `accessToken` (JWT). Klient wysyła `Authori
 
 | Endpoint | Auth |
 |----------|------|
-| `GET /api/health` | publiczny (probe K8s) |
+| `GET /api/health` | publiczny (kompatybilność wsteczna; sondy K8s używają Actuatora na `:9090`) |
 | `GET /api/rooms`, `POST /api/rooms`, `POST .../join` | publiczny (wydaje token) |
 | Reszta REST + `GET /api/rooms/:code` | Bearer JWT |
 | WebSocket subscribe | token w pierwszej wiadomości |
@@ -524,6 +556,17 @@ Przy **create/join** backend zwraca `accessToken` (JWT). Klient wysyła `Authori
 **Rejoin:** nick + kod pokoju → nowy token (istniejący gracz, dowolna faza gry). Nowy nick tylko w lobby.
 
 **Host:** autoryzacja z DB (`is_host`), nie tylko claim JWT.
+
+**Kody HTTP błędów** (spójne odpowiedzi `{ "error": "..." }` z `GlobalExceptionHandler`):
+
+| Kod | Typowe przyczyny |
+|-----|------------------|
+| 400 | Walidacja Bean Validation, niedozwolona akcja w pokoju |
+| 401 | Brak lub nieważny token JWT |
+| 403 | Gra już trwa, akcja tylko dla hosta, join w trakcie gry |
+| 404 | Pokój nie istnieje |
+| 409 | Konflikt optimistic locking (po wyczerpaniu retry) |
+| 429 | Rate limit (create/join) |
 
 Deploy auth wymaga **atomowego** rebuild backend + frontend (`3.2-auth` / `1.1-auth`).
 
@@ -554,8 +597,9 @@ Migracje: [`backend/src/main/resources/db/migration/`](backend/src/main/resource
 |------|------|
 | `V1__initial_schema.sql` | Pełny schemat (świeże bazy) |
 | `V2__players_fk_cascade.sql` | Idempotentny fix FK CASCADE (brownfield) |
+| `V3__rooms_optimistic_lock.sql` | Kolumna `version` dla optimistic locking |
 
-**Nowa migracja:** dodaj `V3__opis.sql`, rebuild backendu, restart deploymentu.
+**Nowa migracja:** dodaj `V4__opis.sql`, rebuild backendu, restart deploymentu.
 
 **Brownfield** (baza CNPG utworzona przez stary `ddl-auto=update`, bez `flyway_schema_history`):
 
@@ -604,7 +648,7 @@ curl http://pm.local/api/rooms
 
 Redis, WebSocket i HPA budują na warstwie API i PostgreSQL — synchronizują stan między replikami backendu i skalują obciążenie, podczas gdy źródłem prawdy pozostaje baza.
 
-Stan pokoju (lobby + gra) synchronizowany jest przez **WebSocket** (`/api/ws/rooms/{code}`) — hook [`useRoomWebSocket.ts`](frontend/src/hooks/useRoomWebSocket.ts). Mutacje (start, stop, głosowanie) idą przez REST. Lista publicznych pokoi na stronie głównej używa REST co 3s.
+Stan pokoju (lobby + gra) synchronizowany jest przez **WebSocket** (`/api/ws/rooms/{code}`). Główny hook UI to [`useRoomWebSocket.ts`](frontend/src/hooks/useRoomWebSocket.ts) (składa [`useWebSocketSync`](frontend/src/hooks/useWebSocketSync.ts) — sync WS + rejoin, [`useGameActions`](frontend/src/hooks/useGameActions.ts) — mutacje REST, [`useGameTimer`](frontend/src/hooks/useGameTimer.ts) — odliczanie). Mutacje (start, stop, głosowanie) idą przez REST. Lista publicznych pokoi na stronie głównej używa REST co 3s.
 
 ### WebSocket
 
@@ -699,11 +743,11 @@ Kontroler nie zawiera już bloków `try/catch` ani ręcznego sprawdzania nicka.
 
 Warstwa statyczna (nginx) i klient API zostały utwardzone:
 
-**Nagłówki nginx + CSP.** [`frontend/nginx.conf`](frontend/nginx.conf) dodaje: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, `Content-Security-Policy` (`connect-src 'self' ws: wss:` dla REST i WebSocket na tym samym hoście). HSTS pozostaje na ingress (TLS). Gzip dla JS/CSS/JSON/SVG; cache `immutable` (1 rok) dla hashowanych statyków Vite; `index.html` z `Cache-Control: no-cache`.
+**Nagłówki nginx + CSP.** [`frontend/nginx.conf`](frontend/nginx.conf) dodaje: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, `Content-Security-Policy` (`connect-src 'self' ws: wss:` dla REST i WebSocket na tym samym hoście). HSTS pozostaje na ingress (TLS). Gzip dla JS/CSS/JSON/SVG; cache `immutable` (1 rok) dla hashowanych statyków Vite; `index.html` z `Cache-Control: no-cache`. Nagłówki bezpieczeństwa są powtórzone w `location` z własnymi regułami cache — nginx nie dziedziczy `add_header` z bloku `server`.
 
 **npm ci.** Dockerfile używa `npm ci` z `package-lock.json` — deterministyczny build obrazu.
 
-**Obsługa 401/403.** [`frontend/src/services/api.ts`](frontend/src/services/api.ts) + `ApiHttpError`:
+**Obsługa 401/403.** [`frontend/src/services/api.ts`](frontend/src/services/api.ts) + [`errors.ts`](frontend/src/services/errors.ts) (`ApiHttpError`):
 - **401** na endpointach chronionych: wyczyść sesję → `ensureSession` (rejoin nick+kod) → jeden retry; przy trwałym braku sesji → redirect na `/`.
 - **403** (np. gość próbuje startu, join do trwającej gry): `alert` z komunikatem backendu, sesja zostaje.
 - Publiczne `create`/`join` parsują kody HTTP (404, 400, 403) zamiast pola `error` w 200.
@@ -784,7 +828,17 @@ Pobranie digestu (do `values-prod.yaml`):
 ```bash
 docker buildx imagetools inspect ghcr.io/OWNER/pm-backend:3.2-auth \
   --format '{{ "{{json .Manifest.Digest}}" }}'
-# wynik: "sha256:..." -> wpisz jako backend.image.digest (repository zostaje pm-backend)
+docker buildx imagetools inspect ghcr.io/OWNER/pm-frontend:1.1-auth \
+  --format '{{ "{{json .Manifest.Digest}}" }}'
+# wynik: "sha256:..." -> wpisz jako backend.image.digest / frontend.image.digest
+```
+
+Po aktualizacji digestów w `values-prod.yaml`:
+
+```bash
+helm upgrade --install pm ./helm/pm -n pm-app \
+  -f helm/pm/values.yaml -f helm/pm/values-prod.yaml
+kubectl rollout status deployment/backend deployment/frontend -n pm-app
 ```
 
 imagePullSecret (jednorazowo):
@@ -846,11 +900,11 @@ Trzy warstwy hardeningu warstwy aplikacji (backend/frontend), domyślnie bezpiec
 
 ```bash
 # minikube (demon dockera minikube)
-eval $(minikube docker-env)
-docker build -t pm-backend:3.3-sec  ./backend
-docker build -t pm-frontend:1.2-sec ./frontend
+eval $(minikube -p minikube docker-env --shell bash)
+docker build -t pm-backend:3.2-auth backend/
+docker build -t pm-frontend:1.1-auth frontend/
 # prod (GHCR) — po push odczytaj digest i wpisz do values-prod.yaml
-docker buildx imagetools inspect ghcr.io/OWNER/pm-frontend:TAG --format '{{ "{{" }}.Manifest.Digest{{ "}}" }}'
+docker buildx imagetools inspect ghcr.io/OWNER/pm-frontend:1.1-auth --format '{{ "{{" }}.Manifest.Digest{{ "}}" }}'
 ```
 
 **securityContext (restricted).** Każdy pod app-tier startuje jako non-root z `seccompProfile: RuntimeDefault`, `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`. Backend ma dodatkowo `readOnlyRootFilesystem: true` z `emptyDir` zamontowanym na `/tmp` (JVM). Parametry w `backend.podSecurityContext`/`backend.containerSecurityContext` i odpowiednikach `frontend.*`.
@@ -933,7 +987,8 @@ Backupy PostgreSQL (Barman PITR) opisane w sekcji [PostgreSQL → Backupy Barman
 kubectl get all,pvc,ingress,hpa -n pm-app
 kubectl logs -n pm-app deploy/backend -f
 kubectl top pod -n pm-app
-kubectl port-forward -n pm-app svc/backend-svc 3000:3000
+kubectl port-forward -n pm-app svc/backend-svc 3000:3000   # API aplikacji
+kubectl port-forward -n pm-app deploy/backend 9090:9090    # Actuator (health, prometheus)
 ```
 
 ### Helm
@@ -983,5 +1038,5 @@ kubectl get svc -n ingress-nginx ingress-nginx-controller
 
 - **CloudNativePG PVC**: każda instancja ma własny PVC; `helm uninstall` nie usuwa PVC domyślnie.
 - **Flyway brownfield**: jednorazowo `postgres.flyway.baselineOnMigrate: true` w values-minikube; potem wyłącz.
-- **Pierwszy start backendu** jest wolniejszy (JVM + Hibernate schema), stąd podwyższone `initialDelaySeconds` w sondach.
+- **Pierwszy start backendu** jest wolniejszy (JVM + Flyway + Hibernate validate) — `startupProbe` daje do ~150s na start zanim liveness zacznie restartować pod.
 - **`helm upgrade` bez release**: samo `helm upgrade` failuje, gdy release nie istnieje — używaj `helm upgrade --install`.
