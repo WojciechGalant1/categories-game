@@ -56,7 +56,27 @@ public class RoomService {
         return saved;
     }
 
-    // Generate a random 6-character alphanumeric code
+    private Room requireRoom(String code) {
+        return roomRepository.findById(code)
+                .orElseThrow(RoomNotFoundException::new);
+    }
+
+    private Player requirePlayer(Room room, UUID playerId) {
+        return room.getPlayers().stream()
+                .filter(p -> p.getId().equals(playerId))
+                .findFirst()
+                .orElseThrow(() -> new InvalidRoomActionException("Player not in room"));
+    }
+
+    private void requireStatus(Room room, String message, Room.RoomStatus... allowed) {
+        for (Room.RoomStatus status : allowed) {
+            if (room.getStatus() == status) {
+                return;
+            }
+        }
+        throw new InvalidRoomActionException(message);
+    }
+
     private String generateRoomCode() {
         String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
         StringBuilder code = new StringBuilder();
@@ -66,7 +86,6 @@ public class RoomService {
         return code.toString();
     }
 
-    // Create a new room
     @Transactional
     public JoinResponse createRoom(CreateRoomRequest request) {
         String code = generateRoomCode();
@@ -79,9 +98,9 @@ public class RoomService {
 
         RoomSettings defaultSettings = new RoomSettings(
             Arrays.asList("Państwa", "Miasta", "Zwierzęta", "Rośliny", "Imiona"),
-            1, // 1 minute
-            5, // 5 rounds
-            8  // max 8 players
+            1,
+            5,
+            8
         );
 
         Room room = new Room(
@@ -105,7 +124,6 @@ public class RoomService {
         return new JoinResponse(code, player.getId(), token);
     }
 
-    // List public rooms
     public List<PublicRoom> listPublicRooms() {
         List<Room> publicRooms = roomRepository.findPublicLobbies();
         List<PublicRoom> result = new ArrayList<>();
@@ -125,8 +143,6 @@ public class RoomService {
         return result;
     }
 
-    // Get room by code (polling endpoint).
-    // Atomically auto-stops an expired round, then computes the live mainTimeLeft.
     @Transactional
     public Room getRoom(String code) {
         long now = System.currentTimeMillis();
@@ -147,14 +163,10 @@ public class RoomService {
         return room;
     }
 
-    // Join or rejoin room
     @Transactional
     @Retryable(retryFor = OptimisticLockingFailureException.class, maxAttempts = 3, backoff = @Backoff(delay = 50))
     public JoinResponse joinRoom(String code, JoinRoomRequest request) {
-        Room room = roomRepository.findById(code).orElse(null);
-        if (room == null) {
-            throw new RoomNotFoundException();
-        }
+        Room room = requireRoom(code);
 
         Optional<Player> existingPlayer = room.getPlayers().stream()
             .filter(p -> p.getNick().equals(request.getNick()))
@@ -180,17 +192,11 @@ public class RoomService {
         return toJoinResponse(code, newPlayer);
     }
 
-    // Update settings
     @Transactional
     @Retryable(retryFor = OptimisticLockingFailureException.class, maxAttempts = 3, backoff = @Backoff(delay = 50))
     public void updateSettings(String code, UUID playerId, UpdateSettingsRequest request) {
-        Room room = roomRepository.findById(code).orElse(null);
-        if (room == null) {
-            throw new RoomNotFoundException();
-        }
-        if (room.getStatus() != Room.RoomStatus.lobby) {
-            throw new InvalidRoomActionException("Cannot change settings (game not in lobby)");
-        }
+        Room room = requireRoom(code);
+        requireStatus(room, "Cannot change settings (game not in lobby)", Room.RoomStatus.lobby);
 
         RoomSettings newSettings = request.getSettings();
         if (newSettings.getCategories() != null) {
@@ -208,19 +214,12 @@ public class RoomService {
         saveAndNotify(room);
     }
 
-    // Start game
     @Transactional
     @Retryable(retryFor = OptimisticLockingFailureException.class, maxAttempts = 3, backoff = @Backoff(delay = 50))
     public void startGame(String code, UUID playerId) {
-        Room room = roomRepository.findById(code).orElse(null);
-        if (room == null) {
-            throw new RoomNotFoundException();
-        }
-        if (room.getStatus() != Room.RoomStatus.lobby && room.getStatus() != Room.RoomStatus.reviewing) {
-            throw new InvalidRoomActionException("Cannot start game (wrong status)");
-        }
+        Room room = requireRoom(code);
+        requireStatus(room, "Cannot start game (wrong status)", Room.RoomStatus.lobby, Room.RoomStatus.reviewing);
 
-        // Reset scores if first round
         if (room.getGame().getCurrentRound() == 0) {
             room.getScores().clear();
             for (Player p : room.getPlayers()) {
@@ -228,7 +227,6 @@ public class RoomService {
             }
         }
 
-        // Draw random letter
         String letter = String.valueOf((char) ('A' + random.nextInt(26)));
 
         long startedAt = System.currentTimeMillis();
@@ -244,72 +242,55 @@ public class RoomService {
         saveAndNotify(room);
     }
 
-    // Trigger stop
     @Transactional
     @Retryable(retryFor = OptimisticLockingFailureException.class, maxAttempts = 3, backoff = @Backoff(delay = 50))
     public void triggerStop(String code, UUID playerId) {
-        Room room = roomRepository.findById(code).orElse(null);
-        if (room == null) {
-            throw new RoomNotFoundException();
-        }
-        if (room.getStatus() != Room.RoomStatus.playing) {
-            throw new InvalidRoomActionException("Not in playing phase");
-        }
-        Player player = room.getPlayers().stream()
-            .filter(p -> p.getId().equals(playerId))
-            .findFirst().orElse(null);
-        if (player == null) {
-            throw new InvalidRoomActionException("Player not in room");
-        }
+        Room room = requireRoom(code);
+        requireStatus(room, "Not in playing phase", Room.RoomStatus.playing);
+        requirePlayer(room, playerId);
 
         String playerIdStr = playerId.toString();
         if (!room.getGame().getStoppedPlayers().contains(playerIdStr)) {
             room.getGame().getStoppedPlayers().add(playerIdStr);
         }
 
-        // If all players stopped, transition to reviewing
         if (room.getGame().getStoppedPlayers().size() == room.getPlayers().size()) {
             room.setStatus(Room.RoomStatus.reviewing);
         }
         saveAndNotify(room);
     }
 
-    // Submit answers
     @Transactional
     @Retryable(retryFor = OptimisticLockingFailureException.class, maxAttempts = 3, backoff = @Backoff(delay = 50))
     public void submitAnswers(String code, UUID playerId, SubmitAnswersRequest request) {
-        Room room = roomRepository.findById(code).orElse(null);
-        if (room == null) {
-            throw new RoomNotFoundException();
-        }
-        Player player = room.getPlayers().stream()
-            .filter(p -> p.getId().equals(playerId))
-            .findFirst().orElse(null);
-        if (player == null) {
-            throw new InvalidRoomActionException("Player not in room");
+        Room room = requireRoom(code);
+        requireStatus(room, "Cannot submit answers in current phase",
+                Room.RoomStatus.playing, Room.RoomStatus.reviewing);
+        requirePlayer(room, playerId);
+
+        Map<String, String> newAnswers = request.getAnswers() != null ? request.getAnswers() : Map.of();
+        String playerIdStr = playerId.toString();
+        Map<String, String> existing = room.getGame().getAnswers().get(playerIdStr);
+        boolean hasExisting = existing != null && !existing.isEmpty();
+
+        if (newAnswers.isEmpty()) {
+            return;
         }
 
-        room.getGame().getAnswers().put(playerId.toString(), request.getAnswers());
+        if (room.getStatus() == Room.RoomStatus.reviewing && hasExisting) {
+            throw new InvalidRoomActionException("Answers are locked during review");
+        }
+
+        room.getGame().getAnswers().put(playerIdStr, newAnswers);
         saveAndNotify(room);
     }
 
-    // Submit vote
     @Transactional
     @Retryable(retryFor = OptimisticLockingFailureException.class, maxAttempts = 3, backoff = @Backoff(delay = 50))
     public void submitVote(String code, UUID voterId, SubmitVoteRequest request) {
-        Room room = roomRepository.findById(code).orElse(null);
-        if (room == null) {
-            throw new RoomNotFoundException();
-        }
-        if (room.getStatus() != Room.RoomStatus.reviewing) {
-            throw new InvalidRoomActionException("Not in reviewing phase");
-        }
-        Player voter = room.getPlayers().stream()
-            .filter(p -> p.getId().equals(voterId))
-            .findFirst().orElse(null);
-        if (voter == null) {
-            throw new InvalidRoomActionException("Voter not in room");
-        }
+        Room room = requireRoom(code);
+        requireStatus(room, "Not in reviewing phase", Room.RoomStatus.reviewing);
+        requirePlayer(room, voterId);
 
         String targetId = request.getTargetPlayerId().toString();
         String voterIdStr = voterId.toString();
@@ -322,20 +303,13 @@ public class RoomService {
         saveAndNotify(room);
     }
 
-    // Next round
     @Transactional
     @Retryable(retryFor = OptimisticLockingFailureException.class, maxAttempts = 3, backoff = @Backoff(delay = 50))
     public void nextRound(String code, UUID playerId) {
-        Room room = roomRepository.findById(code).orElse(null);
-        if (room == null) {
-            throw new RoomNotFoundException();
-        }
-        if (room.getStatus() != Room.RoomStatus.reviewing) {
-            throw new InvalidRoomActionException("Not in reviewing phase");
-        }
+        Room room = requireRoom(code);
+        requireStatus(room, "Not in reviewing phase", Room.RoomStatus.reviewing);
 
-        // Calculate scores
-        calculateScores(room);
+        ScoreCalculator.apply(room);
 
         if (room.getGame().getCurrentRound() >= room.getSettings().getRounds()) {
             room.setStatus(Room.RoomStatus.finished);
@@ -347,94 +321,10 @@ public class RoomService {
         }
     }
 
-    private void calculateScores(Room room) {
-        Map<String, Map<String, String>> answers = room.getGame().getAnswers();
-        Map<String, Map<String, Map<String, Boolean>>> votes = room.getGame().getVotes();
-        List<String> categories = room.getSettings().getCategories();
-
-        // For each player's answers
-        for (Map.Entry<String, Map<String, String>> playerEntry : answers.entrySet()) {
-            String playerId = playerEntry.getKey();
-            Map<String, String> playerAnswers = playerEntry.getValue();
-
-            // For each category
-            for (String category : categories) {
-                String answer = playerAnswers.get(category);
-                if (answer == null || answer.trim().isEmpty()) {
-                    continue;
-                }
-
-                // Check votes for this answer
-                Map<String, Boolean> categoryVotes = votes.getOrDefault(playerId, new HashMap<>()).get(category);
-
-                // Count votes
-                long validVotes = 0;
-                long invalidVotes = 0;
-                if (categoryVotes != null) {
-                    validVotes = categoryVotes.values().stream().filter(v -> v).count();
-                    invalidVotes = categoryVotes.values().stream().filter(v -> !v).count();
-                }
-
-                // Is answer valid? (no negative votes beat positive votes)
-                boolean isValid = validVotes >= invalidVotes;
-
-                if (!isValid) {
-                    continue; // Skip invalid answers
-                }
-
-                // Check uniqueness - count other valid players with same answer
-                int sameAnswerCount = 0;
-                boolean someoneElseAnswered = false;
-
-                for (Map.Entry<String, Map<String, String>> otherEntry : answers.entrySet()) {
-                    String otherId = otherEntry.getKey();
-                    if (otherId.equals(playerId)) continue;
-
-                    String otherAnswer = otherEntry.getValue().get(category);
-                    if (otherAnswer == null || otherAnswer.trim().isEmpty()) continue;
-
-                    someoneElseAnswered = true;
-
-                    // Check if other answer is valid
-                    Map<String, Boolean> otherVotes = votes.getOrDefault(otherId, new HashMap<>()).get(category);
-                    long otherValidVotes = 0;
-                    long otherInvalidVotes = 0;
-                    if (otherVotes != null) {
-                        otherValidVotes = otherVotes.values().stream().filter(v -> v).count();
-                        otherInvalidVotes = otherVotes.values().stream().filter(v -> !v).count();
-                    }
-
-                    if (otherValidVotes >= otherInvalidVotes) {
-                        // Other answer is valid
-                        if (otherAnswer.trim().toLowerCase().equals(answer.trim().toLowerCase())) {
-                            sameAnswerCount++;
-                        }
-                    }
-                }
-
-                // Award points
-                int points = 0;
-                if (!someoneElseAnswered) {
-                    points = 15; // Only one valid answer
-                } else if (sameAnswerCount == 0) {
-                    points = 10; // Unique answer
-                } else {
-                    points = 5; // Duplicate answer
-                }
-
-                room.getScores().put(playerId, room.getScores().get(playerId) + points);
-            }
-        }
-    }
-
-    // Reset to lobby
     @Transactional
     @Retryable(retryFor = OptimisticLockingFailureException.class, maxAttempts = 3, backoff = @Backoff(delay = 50))
     public void resetToLobby(String code, UUID playerId) {
-        Room room = roomRepository.findById(code).orElse(null);
-        if (room == null) {
-            throw new RoomNotFoundException();
-        }
+        Room room = requireRoom(code);
 
         room.setStatus(Room.RoomStatus.lobby);
         room.getScores().clear();
@@ -448,22 +338,11 @@ public class RoomService {
         saveAndNotify(room);
     }
 
-    // Leave room (any phase)
     @Transactional
     @Retryable(retryFor = OptimisticLockingFailureException.class, maxAttempts = 3, backoff = @Backoff(delay = 50))
     public void leaveRoom(String code, UUID playerId) {
-        Room room = roomRepository.findById(code).orElse(null);
-        if (room == null) {
-            throw new RoomNotFoundException();
-        }
-
-        Player leaving = room.getPlayers().stream()
-                .filter(p -> p.getId().equals(playerId))
-                .findFirst()
-                .orElse(null);
-        if (leaving == null) {
-            throw new InvalidRoomActionException("Player not in room");
-        }
+        Room room = requireRoom(code);
+        Player leaving = requirePlayer(room, playerId);
 
         boolean wasHost = leaving.isHost();
         room.getPlayers().remove(leaving);

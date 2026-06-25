@@ -24,6 +24,12 @@ export const useWebSocketSync = (roomCode: string, onReviewingPhase?: () => void
     
     const accessTokenRef = useRef<string | null>(null);
     const playerIdRef = useRef<string | null>(null);
+    const roomStatusRef = useRef<Room["status"] | null>(null);
+    const onReviewingPhaseRef = useRef(onReviewingPhase);
+
+    useEffect(() => {
+        onReviewingPhaseRef.current = onReviewingPhase;
+    }, [onReviewingPhase]);
 
     useEffect(() => {
         accessTokenRef.current = accessToken;
@@ -58,6 +64,9 @@ export const useWebSocketSync = (roomCode: string, onReviewingPhase?: () => void
     }, [roomCode, navigate]);
 
     const processRoomUpdate = useCallback(async (data: Room) => {
+        const prevStatus = roomStatusRef.current;
+        roomStatusRef.current = data.status;
+
         setRoom(data);
 
         if (data.status === "playing" && location.pathname.includes("/room")) {
@@ -67,12 +76,15 @@ export const useWebSocketSync = (roomCode: string, onReviewingPhase?: () => void
             navigate(`/room?code=${roomCode}`);
         }
 
-        if (data.status === "reviewing" && playerIdRef.current) {
-            if (onReviewingPhase) {
-                onReviewingPhase();
-            }
+        // Fallback submit tylko przy przejściu playing → reviewing (auto-stop / wszyscy zatrzymali).
+        if (
+            prevStatus === "playing" &&
+            data.status === "reviewing" &&
+            playerIdRef.current
+        ) {
+            onReviewingPhaseRef.current?.();
         }
-    }, [location.pathname, navigate, roomCode, onReviewingPhase]);
+    }, [location.pathname, navigate, roomCode]);
 
     const tryRejoin = useCallback(async () => {
         const session = await ensureSession(roomCode);
