@@ -4,7 +4,7 @@
 # Idempotentny: każdy sekret jest tworzony przez `kubectl apply` z dry-run,
 # więc ponowne uruchomienie aktualizuje wartości bez błędów "already exists".
 #
-# Na produkcji preferuj Sealed Secrets (zob. infra/sealed-secrets/) zamiast tego skryptu.
+# Na produkcji preferuj Sealed Secrets (zob. docs/production.md) zamiast tego skryptu.
 #
 # Wymagane zmienne:
 #   PG_USER, PG_PASSWORD            - poświadczenia Postgres

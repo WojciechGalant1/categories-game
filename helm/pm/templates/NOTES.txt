@@ -60,3 +60,4 @@
   Restart poda redis zrywa subskrypcje — klienci WebSocket reconnectuja automatycznie.
   Jawne Opuść pokój (ostatni gracz) kasuje pokoj od razu; TTL dotyczy zamkniecia karty / F5.
   W prod: Redis Sentinel / managed Redis zamiast pojedynczej repliki.
+  Dokumentacja: docs/minikube.md (dev), docs/production.md (prod), docs/technical-details.md
